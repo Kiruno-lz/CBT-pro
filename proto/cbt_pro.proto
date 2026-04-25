@@ -1,0 +1,117 @@
+syntax = "proto3";
+package cbt_pro;
+
+message StandardBar {
+    int64 timestamp = 1;
+    string open = 2;
+    string high = 3;
+    string low = 4;
+    string close = 5;
+    string volume = 6;
+    string symbol = 7;
+    string exchange = 8;
+    bool confirmed = 9;
+}
+
+message PositionLeg {
+    string entry_price = 1;
+    string quantity = 2;
+    int64 timestamp = 3;
+    string order_id = 4;
+}
+
+message Position {
+    string id = 1;
+    string symbol = 2;
+    string direction = 3;
+    string status = 4;
+    repeated PositionLeg entries = 5;
+    string current_size = 6;
+    string average_entry_price = 7;
+    string realized_pnl = 8;
+    string unrealized_pnl = 9;
+    int64 opened_at = 10;
+    int64 updated_at = 11;
+}
+
+message OrderRequest {
+    string order_id = 1;
+    string symbol = 2;
+    string side = 3;
+    string direction = 4;
+    string order_type = 5;
+    string limit_price = 6;
+    string stop_price = 7;
+    string quantity = 8;
+    string margin_mode = 9;
+    string leverage = 10;
+    int64 timestamp = 11;
+    string strategy_id = 12;
+    double signal_strength = 13;
+    string signal_reason = 14;
+}
+
+message OrderFill {
+    string order_id = 1;
+    string position_id = 2;
+    string symbol = 3;
+    string side = 4;
+    string direction = 5;
+    string filled_price = 6;
+    string filled_quantity = 7;
+    string fee = 8;
+    string fee_asset = 9;
+    int64 timestamp = 10;
+    string realized_pnl = 11;
+}
+
+message EngineSnapshot {
+    int64 timestamp = 1;
+    StandardBar current_bar = 2;
+    string equity = 3;
+    string available_balance = 4;
+    string margin_used = 5;
+    string margin_ratio = 6;
+    string unrealized_pnl = 7;
+    string realized_pnl_today = 8;
+    repeated Position positions = 9;
+    int64 total_trades = 10;
+    double win_rate = 11;
+    double max_drawdown_pct = 12;
+    double sharpe_ratio = 13;
+}
+
+message BacktestResult {
+    string backtest_id = 1;
+    string final_equity = 2;
+    double total_return_pct = 3;
+    double max_drawdown_pct = 4;
+    double sharpe_ratio = 5;
+    int64 total_trades = 6;
+    double win_rate = 7;
+    double profit_factor = 8;
+    double avg_trade_return = 9;
+    repeated string daily_pnls = 10;
+    repeated OrderFill trades = 11;
+}
+
+message Signal {
+    string action = 1;
+    string symbol = 2;
+    string quantity = 3;
+    double strength = 4;
+    string reason = 5;
+    string take_profit = 6;
+    string stop_loss = 7;
+}
+
+message WebSocketMessage {
+    string type = 1;
+    oneof payload {
+        EngineSnapshot snapshot = 2;
+        StandardBar bar_update = 3;
+        OrderFill trade = 4;
+        Signal signal = 5;
+        BacktestResult complete = 6;
+    }
+}

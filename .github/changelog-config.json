@@ -1,0 +1,27 @@
+{
+  "categories": [
+    {
+      "title": "## Features",
+      "labels": ["feat", "feature"]
+    },
+    {
+      "title": "## Fixes",
+      "labels": ["fix", "bugfix"]
+    },
+    {
+      "title": "## DevOps & Infrastructure",
+      "labels": ["chore", "ci", "devops", "docker"]
+    },
+    {
+      "title": "## Documentation",
+      "labels": ["docs", "doc"]
+    },
+    {
+      "title": "## Tests",
+      "labels": ["test", "tests"]
+    }
+  ],
+  "template": "${{CHANGELOG}}\n\n## Contributors\n${{UNCATEGORIZED}}",
+  "pr_template": "- ${{TITLE}} (#${{NUMBER}}) @${{AUTHOR}}",
+  "empty_template": "No changes recorded for this release."
+}

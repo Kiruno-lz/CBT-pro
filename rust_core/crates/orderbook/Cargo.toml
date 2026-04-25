@@ -1,0 +1,14 @@
+[package]
+name = "orderbook"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+indicators = { path = "../indicators" }
+data_pipeline = { path = "../data_pipeline" }
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1.33"
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }

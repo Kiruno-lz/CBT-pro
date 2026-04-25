@@ -1,0 +1,36 @@
+# Node modules
+node_modules
+npm-debug.log*
+yarn-error.log*
+
+# Build output (only dist should be copied from builder)
+# dist is intentionally NOT ignored here — we need it in the build context
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+/docs
+
+# Test artifacts
+coverage
+.nyc_output
+
+# CI
+.github
+
+# Local env files
+.env
+.env.local

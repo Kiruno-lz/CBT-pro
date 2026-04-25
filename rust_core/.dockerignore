@@ -1,0 +1,36 @@
+# Rust build artifacts
+/target
+/Cargo.lock
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+/docs
+
+# Test artifacts
+*.profraw
+lcov.info
+cobertura.xml
+
+# CI
+.github
+
+# Local env files
+.env
+.env.local
+
+# Database
+/database
