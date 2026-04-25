@@ -92,19 +92,19 @@ export default function Dashboard() {
     }
 
     return () => {
-      wsRef.current?.disconnect?.();
-      wsRef.current?.close?.();
+      (wsRef.current as any)?.disconnect?.();
+      (wsRef.current as any)?.close?.();
     };
   }, [useMock]);
 
   const handleControl = useCallback((action: 'play' | 'pause' | 'step_forward' | 'step_backward') => {
-    wsRef.current?.sendControl?.(action);
-    wsRef.current?.send?.(JSON.stringify({ type: 'control', action }));
+    (wsRef.current as any)?.sendControl?.(action);
+    (wsRef.current as any)?.send?.({ type: 'control', action });
   }, []);
 
   const handleSpeedChange = useCallback((speed: number) => {
-    wsRef.current?.setSpeed?.(speed);
-    wsRef.current?.send?.(JSON.stringify({ type: 'control', action: 'set_speed', speed }));
+    (wsRef.current as any)?.setSpeed?.(speed);
+    (wsRef.current as any)?.send?.({ type: 'control', action: 'set_speed', speed });
   }, []);
 
   const handleSeek = useCallback((index: number) => {

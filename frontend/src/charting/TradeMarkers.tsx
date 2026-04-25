@@ -8,13 +8,13 @@ interface TradeMarkersProps {
   trades: OrderFill[];
 }
 
-function getMarkerShape(_direction: 'Long' | 'Short', _side: 'Buy' | 'Sell', realizedPnl?: string): SeriesMarker<Time>['shape'] {
+function getMarkerShape(direction: 'Long' | 'Short', _side: 'Buy' | 'Sell', realizedPnl?: string): SeriesMarker<Time>['shape'] {
   const isClose = !!realizedPnl;
   if (isClose) return 'square';
   return direction === 'Long' ? 'arrowUp' : 'arrowDown';
 }
 
-function getMarkerColor(_direction: 'Long' | 'Short', _side: 'Buy' | 'Sell', realizedPnl?: string): string {
+function getMarkerColor(_direction: 'Long' | 'Short', side: 'Buy' | 'Sell', realizedPnl?: string): string {
   if (realizedPnl) {
     const pnl = parseFloat(realizedPnl);
     return pnl >= 0 ? '#22c55e' : '#ef4444';

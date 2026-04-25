@@ -41,7 +41,7 @@ RUN groupadd -r cbtpro && useradd -r -g cbtpro cbtpro
 
 # Copy the compiled binary from builder
 # The api crate produces the HTTP/WebSocket gateway binary
-COPY --from=builder /app/target/release/api /usr/local/bin/cbt-pro-api
+COPY --from=builder /app/target/release/cbt-pro-api /usr/local/bin/cbt-pro-api
 
 # Set proper ownership
 RUN chown cbtpro:cbtpro /usr/local/bin/cbt-pro-api
