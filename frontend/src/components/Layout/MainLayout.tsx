@@ -16,7 +16,7 @@ export function MainLayout({ wsRef }: MainLayoutProps) {
   const { playback, backtestResult } = useAppStore();
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="h-screen flex flex-col overflow-hidden">
       <header className="h-10 bg-surface-base border-b border-border-subtle flex items-center justify-between px-4">
         <div className="flex items-center gap-3">
           <h1 className="text-sm font-semibold text-text-primary tracking-tight">CBT-Pro</h1>
@@ -32,13 +32,16 @@ export function MainLayout({ wsRef }: MainLayoutProps) {
           </div>
         </div>
 
-        <div className="w-72 flex-shrink-0 flex flex-col gap-3 ml-3">
-          <AccountDashboard />
+        <div className="w-72 flex-shrink-0 flex flex-col gap-3 ml-3 overflow-hidden">
           {playback.status === 'idle' && !backtestResult ? (
-            <BacktestConfig wsRef={wsRef} />
+            <>
+              <BacktestConfig wsRef={wsRef} />
+              <AccountDashboard />
+            </>
           ) : (
             <>
               <PlaybackPanel wsRef={wsRef} />
+              <AccountDashboard />
               <SignalsPanel />
             </>
           )}

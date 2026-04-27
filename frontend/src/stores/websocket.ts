@@ -67,8 +67,9 @@ export class EngineWebSocket {
     this.send({ type: 'control', action, backtest_id: this.backtestId });
   }
 
-  setSpeed(speed: number): void {
-    this.send({ type: 'control', action: 'set_speed', speed });
+  setSpeed(speed: number | 'max'): void {
+    const payloadSpeed = speed === 'max' ? 0 : speed;
+    this.send({ type: 'control', action: 'set_speed', speed: payloadSpeed });
   }
 
   private send(data: Record<string, unknown>): void {

@@ -102,7 +102,7 @@ export interface PlaybackState {
   status: 'idle' | 'playing' | 'paused' | 'stepping' | 'complete';
   currentBarIndex: number;
   totalBars: number;
-  speed: number;
+  speed: number | 'max';
   currentTime: number;
 }
 
