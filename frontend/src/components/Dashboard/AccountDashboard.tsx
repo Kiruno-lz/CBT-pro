@@ -26,7 +26,7 @@ export function AccountDashboard() {
   const totalReturnFormatted = formatPnL(`${totalReturn}%`);
 
   return (
-    <div className="panel">
+    <div className="panel flex-shrink-0 overflow-y-auto">
       <div className="panel-header">
         <span className="panel-title">Account</span>
         <span className="text-2xs font-mono text-text-muted">{positions.length} POS</span>

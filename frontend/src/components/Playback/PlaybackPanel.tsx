@@ -6,7 +6,7 @@ interface PlaybackPanelProps {
   wsRef: RefObject<EngineWebSocket | null>;
 }
 
-const SPEED_OPTIONS = [0.5, 1, 2, 5, 10];
+const SPEED_OPTIONS: Array<number | 'max'> = [0.5, 1, 3, 10, 'max'];
 
 export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
   const { playback, setPlayback } = useAppStore();
@@ -33,7 +33,7 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
     setPlayback({ status: 'playing' });
     const playStep = () => wsRef.current?.sendControl('play');
     playStep();
-    const ms = Math.max(200, 1000 / speed);
+    const ms = speed === 'max' ? 50 : Math.max(200, 1000 / speed);
     intervalRef.current = setInterval(playStep, ms);
   };
 
@@ -54,7 +54,7 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
     wsRef.current?.sendControl('step_backward');
   };
 
-  const handleSpeedChange = (newSpeed: number) => {
+  const handleSpeedChange = (newSpeed: number | 'max') => {
     setPlayback({ speed: newSpeed });
     wsRef.current?.setSpeed(newSpeed);
   };
@@ -65,7 +65,7 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
   };
 
   return (
-    <div className="panel">
+    <div className="panel flex-shrink-0">
       <div className="panel-header">
         <span className="panel-title">Playback Control</span>
       </div>
@@ -131,7 +131,7 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
                     : 'bg-surface-raised text-text-secondary hover:bg-surface-elevated'
                 }`}
               >
-                {s}x
+                {s === 'max' ? 'max' : `${s}x`}
               </button>
             ))}
           </div>

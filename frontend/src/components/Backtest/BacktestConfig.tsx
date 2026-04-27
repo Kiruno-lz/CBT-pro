@@ -116,7 +116,7 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
   };
 
   return (
-    <div className="panel">
+    <div className="panel flex-shrink-0">
       <div className="panel-header">
         <span className="panel-title">Backtest Config</span>
       </div>

@@ -56,7 +56,7 @@ export function BacktestResult() {
   const losers = trades.filter((t) => parseFloat(t.realized_pnl || '0') < 0);
 
   return (
-    <div className="panel">
+    <div className="panel flex-shrink-0">
       <div className="panel-header">
         <span className="panel-title">Backtest Result</span>
         <span className="text-2xs font-mono text-accent-cyan">
