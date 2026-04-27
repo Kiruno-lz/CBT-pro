@@ -16,12 +16,6 @@ graph TB
         Indicators["indicators/ Technical Indicators"]
     end
 
-    subgraph Python_Layer["Python Layer (python_strategies/)"]
-        Strategies["strategies/ Strategy Implementations"]
-        PyIndicators["indicators/ Python Indicator Wrappers"]
-        SDK["backtest_client/ HTTP SDK"]
-    end
-
     subgraph Frontend["Frontend (frontend/)"]
         React["React 19 + TypeScript"]
         Charts["lightweight-charts"]
@@ -38,14 +32,11 @@ graph TB
     Indicators --> Engine
     OrderBook --> Engine
     Engine --> API
-    API --> SDK
     API --> React
-    Strategies --> SDK
     Postgres --> DataPipeline
 
     React -->|WebSocket| API
     React -->|REST| API
-    SDK -->|REST| API
 ```
 
 ## Module Responsibilities
@@ -78,12 +69,6 @@ graph TB
 - WebSocket gateway for real-time updates
 - MsgPack serialization for efficiency
 
-### `python_strategies/`
-- Strategy development in Python
-- Abstract BaseStrategy interface
-- HTTP SDK for engine communication
-- Pydantic data validation
-
 ### `frontend/`
 - React 19 + TypeScript 5.5
 - Real-time chart visualization
@@ -113,7 +98,6 @@ All inter-module communication follows the interface contracts defined in SPEC.m
 | Data Storage | PostgreSQL 15, SQLx |
 | Serialization | Serde, Protocol Buffers |
 | Math | rust_decimal |
-| Python | 3.11+, Pydantic, aiohttp, pandas |
 | Frontend | React 19, TypeScript 5.5, Vite 6 |
 | Charts | lightweight-charts |
 | State | Zustand |
