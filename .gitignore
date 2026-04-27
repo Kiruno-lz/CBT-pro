@@ -60,3 +60,6 @@ rust_core/target
 # Misc
 *.bak
 *.cache
+
+.playwright-cli
+**/pnpm-lock.yaml

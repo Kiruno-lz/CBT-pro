@@ -69,6 +69,7 @@ export interface Signal {
 
 export interface EngineSnapshot {
   timestamp: number;
+  current_bar_index: number;
   current_bar: StandardBar;
   equity: string;
   available_balance: string;

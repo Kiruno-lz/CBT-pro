@@ -80,15 +80,23 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                 match action.as_str() {
                                     "step_forward" => {
                                         if let Some(snapshot) = engine.step() {
-                                            let resp = ServerMessage::Snapshot { data: snapshot };
+                                            // Send snapshot
+                                            let resp = ServerMessage::Snapshot { data: snapshot.clone() };
                                             let _ = socket.send(Message::Text(serde_json::to_string(&resp).unwrap())).await;
+                                            // Send bar_update
+                                            let bar_resp = ServerMessage::BarUpdate { bar: serde_json::to_value(&snapshot.current_bar).unwrap() };
+                                            let _ = socket.send(Message::Text(serde_json::to_string(&bar_resp).unwrap())).await;
                                         }
                                     }
                                     "play" => {
                                         // Run one step as demo; full play loop would require task spawning
                                         if let Some(snapshot) = engine.step() {
-                                            let resp = ServerMessage::Snapshot { data: snapshot };
+                                            // Send snapshot
+                                            let resp = ServerMessage::Snapshot { data: snapshot.clone() };
                                             let _ = socket.send(Message::Text(serde_json::to_string(&resp).unwrap())).await;
+                                            // Send bar_update
+                                            let bar_resp = ServerMessage::BarUpdate { bar: serde_json::to_value(&snapshot.current_bar).unwrap() };
+                                            let _ = socket.send(Message::Text(serde_json::to_string(&bar_resp).unwrap())).await;
                                         }
                                     }
                                     _ => {}

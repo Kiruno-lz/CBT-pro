@@ -98,8 +98,11 @@ export class EngineWebSocket {
       case 'snapshot': {
         this.store.setSnapshot(msg.data);
         this.store.setEngineOnline(true);
+        if (msg.data.current_bar) {
+          this.store.appendBar(msg.data.current_bar);
+        }
         this.store.setPlayback({
-          currentBarIndex: msg.data.total_trades,
+          currentBarIndex: msg.data.current_bar_index,
           currentTime: msg.data.timestamp,
         });
         break;
