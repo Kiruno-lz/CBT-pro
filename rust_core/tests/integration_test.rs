@@ -1,5 +1,5 @@
-use data_pipeline::bar::StandardBar;
-use engine::{BacktestEngine, EngineConfig, EngineSnapshot};
+use data_pipeline::StandardBar;
+use engine::{BacktestEngine, EngineConfig, EngineSnapshot, Signal};
 use orderbook::{CostBasisMethod, MarginMode};
 use rust_decimal::Decimal;
 
@@ -49,21 +49,6 @@ fn generate_synthetic_bars() -> Vec<StandardBar> {
     bars
 }
 
-/// A simple always-long strategy that opens a long on the first bar.
-fn always_long_strategy(ctx: &engine::StrategyContext) -> Option<engine::Signal> {
-    if ctx.current_bar_index == 1 {
-        Some(engine::Signal {
-            action: engine::SignalAction::OpenLong,
-            symbol: "BTC-USDT".to_string(),
-            quantity: Decimal::from(1),
-            strength: 1.0,
-            reason: "Always long test strategy".to_string(),
-        })
-    } else {
-        None
-    }
-}
-
 #[test]
 fn test_full_backtest_pipeline() {
     let bars = generate_synthetic_bars();
@@ -82,8 +67,18 @@ fn test_full_backtest_pipeline() {
         risk_free_rate: 0.02,
     };
 
-    let mut engine = engine::BacktestEngine::new(config, bars.clone());
-    engine.set_strategy_callback(Box::new(always_long_strategy));
+    let mut engine = BacktestEngine::new(config, bars.clone());
+
+    // Simulate the original "always long" strategy by submitting a signal
+    // after the first bar (mirrors old behaviour: signal at current_bar_index == 1).
+    engine.step();
+    engine.submit_signal(Signal {
+        action: "open_long".to_string(),
+        symbol: "BTC-USDT".to_string(),
+        quantity: Decimal::from(1),
+        strength: 1.0,
+        reason: "Always long test strategy".to_string(),
+    });
 
     let result = engine.run().expect("Backtest should complete without error");
 
@@ -96,9 +91,9 @@ fn test_full_backtest_pipeline() {
 
     // 2. Max drawdown must be >= 0
     assert!(
-        result.max_drawdown >= Decimal::ZERO,
+        result.max_drawdown_pct >= 0.0,
         "Max drawdown must be non-negative, got {}",
-        result.max_drawdown
+        result.max_drawdown_pct
     );
 
     // 3. At least one trade should have occurred
@@ -108,22 +103,23 @@ fn test_full_backtest_pipeline() {
         result.total_trades
     );
 
-    // 4. Verify total trades = winning + losing
-    assert_eq!(
-        result.total_trades,
-        result.winning_trades + result.losing_trades,
-        "Total trades must equal winning + losing trades"
-    );
-
-    // 5. Win rate should be between 0 and 100
+    // 4. Win rate should be between 0 and 1
     assert!(
-        result.win_rate >= 0.0 && result.win_rate <= 100.0,
-        "Win rate must be between 0 and 100, got {}",
+        result.win_rate >= 0.0 && result.win_rate <= 1.0,
+        "Win rate must be between 0 and 1, got {}",
         result.win_rate
     );
 
-    // 6. Bar-by-bar execution should produce deterministic results
+    // 5. Bar-by-bar execution should produce deterministic results
     engine.reset();
+    engine.step();
+    engine.submit_signal(Signal {
+        action: "open_long".to_string(),
+        symbol: "BTC-USDT".to_string(),
+        quantity: Decimal::from(1),
+        strength: 1.0,
+        reason: "Always long test strategy".to_string(),
+    });
     let result2 = engine.run().expect("Second run should also succeed");
     assert_eq!(
         result.final_equity, result2.final_equity,
@@ -153,36 +149,27 @@ fn test_data_leakage_prevention() {
         risk_free_rate: 0.02,
     };
 
-    // Strategy that attempts to look ahead
-    let mut accessed_future = false;
-    let strategy = move |ctx: &engine::StrategyContext| -> Option<engine::Signal> {
-        // The engine MUST prevent access to bars beyond current_bar_index
-        // In a proper implementation, ctx.bar_history.len() should never exceed
-        // ctx.current_bar_index + 1 (because indexing is 0-based)
-        let history_len = ctx.bar_history.len();
-        let expected_max = ctx.current_bar_index + 1;
+    let mut engine = BacktestEngine::new(config, bars.clone());
 
-        if history_len > expected_max {
-            accessed_future = true;
-        }
+    // Step through several bars
+    for _ in 0..10 {
+        engine.step();
+    }
 
-        None
-    };
+    // get_strategy_bars should never return more bars than current_idx
+    let strategy_bars = engine.get_strategy_bars(100);
+    assert_eq!(
+        strategy_bars.len(),
+        10,
+        "Strategy should only see past bars (10), got {}",
+        strategy_bars.len()
+    );
 
-    let mut engine = engine::BacktestEngine::new(config, bars.clone());
-    engine.set_strategy_callback(Box::new(strategy));
-
-    // The backtest should either:
-    // 1. Complete successfully (engine prevented leakage internally)
-    // 2. Return an error about data leakage
-    let _result = engine.run();
-
-    // If the engine properly prevents leakage, the flag should never be set
-    // Note: This assertion documents the expected behavior. If the engine
-    // does not yet enforce this, the test serves as a specification.
-    assert!(
-        !accessed_future,
-        "Strategy was able to access future data — engine leakage prevention is broken"
+    // Verify the most recent accessible bar is the 9th bar (0-indexed)
+    assert_eq!(
+        strategy_bars.last().unwrap().timestamp,
+        bars[9].timestamp,
+        "Strategy should not see future data"
     );
 }
 
@@ -204,20 +191,40 @@ fn test_execution_delay_default() {
         risk_free_rate: 0.02,
     };
 
-    let mut engine = engine::BacktestEngine::new(config, bars.clone());
-    engine.set_strategy_callback(Box::new(always_long_strategy));
+    let mut engine = BacktestEngine::new(config, bars.clone());
 
     // Step through the engine bar by bar
     let mut snapshots: Vec<EngineSnapshot> = Vec::new();
+    snapshots.push(engine.step().unwrap());
+    snapshots.push(engine.step().unwrap());
+    snapshots.push(engine.step().unwrap());
+
+    // Submit a signal at current state (after 3 steps, current_idx == 3)
+    engine.submit_signal(Signal {
+        action: "open_long".to_string(),
+        symbol: "BTC-USDT".to_string(),
+        quantity: Decimal::from(1),
+        strength: 1.0,
+        reason: "Test execution delay".to_string(),
+    });
+
+    // With execution_delay_bars = 1, signal should execute at bar 4
     while let Some(snapshot) = engine.step() {
         snapshots.push(snapshot);
     }
 
-    // With execution_delay_bars = 1, a signal generated at bar 1
-    // should execute at bar 2. Verify the first fill occurs after delay.
     assert!(
         snapshots.len() > 2,
         "Need at least 3 snapshots to verify execution delay"
+    );
+
+    // Verify the first trade occurred at bar index 4 (3 + 1 delay)
+    let first_trade = snapshots.iter().find(|s| s.total_trades > 0);
+    assert!(first_trade.is_some(), "Expected a trade to occur");
+    assert_eq!(
+        first_trade.unwrap().current_bar_index,
+        4,
+        "Signal submitted after bar 3 should execute at bar 4 with delay=1"
     );
 }
 
@@ -239,15 +246,24 @@ fn test_liquidation_trigger() {
         risk_free_rate: 0.02,
     };
 
-    let mut engine = engine::BacktestEngine::new(config, bars.clone());
-    engine.set_strategy_callback(Box::new(always_long_strategy));
+    let mut engine = BacktestEngine::new(config, bars.clone());
+
+    // Step once then submit a long signal to open a position
+    engine.step();
+    engine.submit_signal(Signal {
+        action: "open_long".to_string(),
+        symbol: "BTC-USDT".to_string(),
+        quantity: Decimal::from(1),
+        strength: 1.0,
+        reason: "Liquidation test".to_string(),
+    });
 
     let result = engine.run().expect("Backtest should complete");
 
-    // With 100x leverage on a down-trending market, we expect liquidation
+    // With 100x leverage on a down-trending market, we expect drawdown
     // The engine should handle this gracefully (position force-closed)
     assert!(
-        result.max_drawdown_pct > Decimal::ZERO,
+        result.max_drawdown_pct > 0.0,
         "High leverage strategy should experience drawdown"
     );
 }

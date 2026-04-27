@@ -1,6 +1,9 @@
 use crate::{error::DataError, StandardBar, TimeFrame};
 use rust_decimal::Decimal;
 use tracing::{debug, info};
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
+use rand::Rng;
 
 /// Abstraction over a cryptocurrency exchange data feed.
 #[async_trait::async_trait]
@@ -49,18 +52,21 @@ impl ExchangeAdapter for BinanceAdapter {
             return Ok(Vec::new());
         }
 
-        let base_price = Decimal::from(42000);
+        let mut rng = SmallRng::seed_from_u64(42);
+        let mut price = Decimal::from(42000);
         let mut bars: Vec<StandardBar> = Vec::with_capacity(count);
         let normalised = self.normalize_symbol(symbol);
 
         for i in 0..count {
             let ts = start + (i as i64) * tf_secs;
-            let delta = Decimal::from(i as i64 % 100);
-            let open = base_price + delta;
-            let close = open + Decimal::from(1);
-            let high = close + Decimal::from(5);
-            let low = open - Decimal::from(5);
-            let volume = Decimal::from(100);
+            let open = price;
+            let delta = Decimal::from(rng.gen_range(-50i64..=50i64));
+            let close = open + delta;
+            let high_offset = Decimal::from(rng.gen_range(5i64..=25i64));
+            let low_offset = Decimal::from(rng.gen_range(5i64..=25i64));
+            let high = open.max(close) + high_offset;
+            let low = open.min(close) - low_offset;
+            let volume = Decimal::from(rng.gen_range(50i64..=500i64));
 
             bars.push(StandardBar {
                 timestamp: ts,
@@ -73,6 +79,7 @@ impl ExchangeAdapter for BinanceAdapter {
                 exchange: self.name().to_string(),
                 confirmed: true,
             });
+            price = close;
         }
 
         info!(count = bars.len(), "BinanceAdapter generated synthetic bars");
@@ -119,18 +126,21 @@ impl ExchangeAdapter for OkxAdapter {
             return Ok(Vec::new());
         }
 
-        let base_price = Decimal::from(42000);
+        let mut rng = SmallRng::seed_from_u64(42);
+        let mut price = Decimal::from(42000);
         let mut bars: Vec<StandardBar> = Vec::with_capacity(count);
         let normalised = self.normalize_symbol(symbol);
 
         for i in 0..count {
             let ts = start + (i as i64) * tf_secs;
-            let delta = Decimal::from(i as i64 % 100);
-            let open = base_price + delta;
-            let close = open + Decimal::from(1);
-            let high = close + Decimal::from(5);
-            let low = open - Decimal::from(5);
-            let volume = Decimal::from(100);
+            let open = price;
+            let delta = Decimal::from(rng.gen_range(-50i64..=50i64));
+            let close = open + delta;
+            let high_offset = Decimal::from(rng.gen_range(5i64..=25i64));
+            let low_offset = Decimal::from(rng.gen_range(5i64..=25i64));
+            let high = open.max(close) + high_offset;
+            let low = open.min(close) - low_offset;
+            let volume = Decimal::from(rng.gen_range(50i64..=500i64));
 
             bars.push(StandardBar {
                 timestamp: ts,
@@ -143,6 +153,7 @@ impl ExchangeAdapter for OkxAdapter {
                 exchange: self.name().to_string(),
                 confirmed: true,
             });
+            price = close;
         }
 
         info!(count = bars.len(), "OkxAdapter generated synthetic bars");

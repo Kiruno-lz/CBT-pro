@@ -413,6 +413,7 @@ fn reduce_weighted_average(pos: &mut Position, fill: &OrderFill) -> Decimal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{MarginMode, OrderSide, OrderType};
     use rust_decimal_macros::dec;
 
     fn make_fill(price: Decimal, qty: Decimal) -> OrderFill {

@@ -134,6 +134,7 @@ impl OrderSimulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Direction, MarginMode};
     use rust_decimal_macros::dec;
     use uuid::Uuid;
 

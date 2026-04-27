@@ -18,6 +18,9 @@ use orderbook::{OrderRequest, OrderFill, OrderSide, Direction, OrderType, Margin
 use data_pipeline::{StandardBar, TimeFrame};
 use rust_decimal::Decimal;
 use std::str::FromStr;
+use rand::rngs::SmallRng;
+use rand::SeedableRng;
+use rand::Rng;
 
 /// Application state shared across handlers.
 pub type AppState = Arc<Mutex<HashMap<String, BacktestEngine>>>;
@@ -266,23 +269,146 @@ fn parse_order_request(payload: Value) -> Result<OrderRequest, String> {
 
 fn generate_synthetic_bars(symbol: &str, count: usize) -> Vec<StandardBar> {
     let mut bars = Vec::with_capacity(count);
-    let base = Decimal::from(40000);
+    let mut rng = SmallRng::seed_from_u64(42);
+    let mut price = Decimal::from(40000);
     for i in 0..count {
-        let open = base + Decimal::from(i as i64 * 10);
-        let close = open + Decimal::from((i % 5) as i64 * 5 - 10);
-        let high = if close > open { close + Decimal::from(20) } else { open + Decimal::from(20) };
-        let low = if close < open { close - Decimal::from(20) } else { open - Decimal::from(20) };
+        let open = price;
+        let delta = Decimal::from(rng.gen_range(-50i64..=50i64));
+        let close = open + delta;
+        let high_offset = Decimal::from(rng.gen_range(5i64..=25i64));
+        let low_offset = Decimal::from(rng.gen_range(5i64..=25i64));
+        let high = open.max(close) + high_offset;
+        let low = open.min(close) - low_offset;
+        let volume = Decimal::from(rng.gen_range(50i64..=500i64));
         bars.push(StandardBar {
             timestamp: 1704067200000 + i as i64 * 60000,
             open,
             high,
             low,
             close,
-            volume: Decimal::from(10 + (i % 5) as i64),
+            volume,
             symbol: symbol.to_string(),
             exchange: "binance".to_string(),
             confirmed: true,
         });
+        price = close;
     }
     bars
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_synthetic_bars_no_short_cycle() {
+        let bars = generate_synthetic_bars("BTC-USDT", 1000);
+        let closes: Vec<Decimal> = bars.iter().map(|b| b.close).collect();
+        let volumes: Vec<Decimal> = bars.iter().map(|b| b.volume).collect();
+
+        // 检测5周期循环
+        let has_5_cycle = detect_price_cycle(&closes, 5, 3);
+        assert!(!has_5_cycle, "修复后的 generate_synthetic_bars 不应存在5周期价格循环");
+
+        let has_5_volume_cycle = detect_volume_cycle(&volumes, 5, 3);
+        assert!(!has_5_volume_cycle, "修复后的 generate_synthetic_bars 不应存在5周期volume循环");
+    }
+
+    #[test]
+    fn test_generate_synthetic_bars_ohlcv_relationships() {
+        let bars = generate_synthetic_bars("BTC-USDT", 1000);
+        // 验证每根K线的OHLC关系
+        for (i, bar) in bars.iter().enumerate() {
+            assert!(bar.high >= bar.open, "Bar {}: high < open", i);
+            assert!(bar.high >= bar.close, "Bar {}: high < close", i);
+            assert!(bar.low <= bar.open, "Bar {}: low > open", i);
+            assert!(bar.low <= bar.close, "Bar {}: low > close", i);
+            assert!(bar.high >= bar.low, "Bar {}: high < low", i);
+        }
+    }
+
+    #[test]
+    fn test_generate_synthetic_bars_random_walk() {
+        let bars = generate_synthetic_bars("BTC-USDT", 100);
+        // 验证价格不是单调递增的（随机漫步应该有涨有跌）
+        let mut has_up = false;
+        let mut has_down = false;
+        for window in bars.windows(2) {
+            let prev = &window[0];
+            let curr = &window[1];
+            if curr.close > prev.close {
+                has_up = true;
+            } else if curr.close < prev.close {
+                has_down = true;
+            }
+        }
+        assert!(has_up && has_down, "随机漫步应该同时包含上涨和下跌的K线");
+    }
+
+    #[test]
+    fn test_generate_synthetic_bars_deterministic() {
+        // 使用相同seed应该生成完全相同的序列
+        let bars1 = generate_synthetic_bars("BTC-USDT", 100);
+        let bars2 = generate_synthetic_bars("BTC-USDT", 100);
+        assert_eq!(bars1.len(), bars2.len());
+        for (a, b) in bars1.iter().zip(bars2.iter()) {
+            assert_eq!(a.timestamp, b.timestamp);
+            assert_eq!(a.open, b.open);
+            assert_eq!(a.high, b.high);
+            assert_eq!(a.low, b.low);
+            assert_eq!(a.close, b.close);
+            assert_eq!(a.volume, b.volume);
+        }
+    }
+
+    // 辅助函数（从 test_kline_repetition.rs 复制）
+    fn detect_price_cycle(values: &[Decimal], cycle_len: usize, min_repetitions: usize) -> bool {
+        if values.len() < cycle_len * min_repetitions + 1 {
+            return false;
+        }
+        let diffs: Vec<Decimal> = values.windows(2).map(|w| w[1] - w[0]).collect();
+        if diffs.len() < cycle_len * min_repetitions {
+            return false;
+        }
+        for start in 0..=diffs.len().saturating_sub(cycle_len * min_repetitions) {
+            let pattern = &diffs[start..start + cycle_len];
+            let mut count = 1;
+            for rep in 1..min_repetitions {
+                let next_start = start + cycle_len * rep;
+                let next_end = next_start + cycle_len;
+                if &diffs[next_start..next_end] == pattern {
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+            if count >= min_repetitions {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn detect_volume_cycle(volumes: &[Decimal], cycle_len: usize, min_repetitions: usize) -> bool {
+        if volumes.len() < cycle_len * min_repetitions {
+            return false;
+        }
+        for start in 0..=volumes.len().saturating_sub(cycle_len * min_repetitions) {
+            let pattern = &volumes[start..start + cycle_len];
+            let mut count = 1;
+            for rep in 1..min_repetitions {
+                let next_start = start + cycle_len * rep;
+                let next_end = next_start + cycle_len;
+                if &volumes[next_start..next_end] == pattern {
+                    count += 1;
+                } else {
+                    break;
+                }
+            }
+            if count >= min_repetitions {
+                return true;
+            }
+        }
+        false
+    }
 }

@@ -31,6 +31,12 @@ api = { path = "crates/api" }
 tokio.workspace = true
 tracing-subscriber.workspace = true
 
+[dev-dependencies]
+data_pipeline = { path = "crates/data_pipeline" }
+engine = { path = "crates/engine" }
+orderbook = { path = "crates/orderbook" }
+rust_decimal = { workspace = true }
+
 [[bin]]
 name = "cbt-pro-api"
 path = "src/main.rs"
