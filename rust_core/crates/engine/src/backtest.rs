@@ -23,6 +23,7 @@ pub struct Signal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineSnapshot {
     pub timestamp: i64,
+    pub current_bar_index: usize,
     pub current_bar: data_pipeline::StandardBar,
     pub equity: Decimal,
     pub available_balance: Decimal,
@@ -477,6 +478,7 @@ impl BacktestEngine {
 
         EngineSnapshot {
             timestamp: bar.timestamp,
+            current_bar_index: self.current_idx,
             current_bar: bar,
             equity,
             available_balance: equity - self.margin_used,
