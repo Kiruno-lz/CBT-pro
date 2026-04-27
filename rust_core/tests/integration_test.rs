@@ -67,7 +67,7 @@ fn test_full_backtest_pipeline() {
         risk_free_rate: 0.02,
     };
 
-    let mut engine = BacktestEngine::new(config, bars.clone());
+    let mut engine = BacktestEngine::new(config, bars.clone(), None);
 
     // Simulate the original "always long" strategy by submitting a signal
     // after the first bar (mirrors old behaviour: signal at current_bar_index == 1).
@@ -78,6 +78,7 @@ fn test_full_backtest_pipeline() {
         quantity: Decimal::from(1),
         strength: 1.0,
         reason: "Always long test strategy".to_string(),
+        timestamp: 0,
     });
 
     let result = engine.run().expect("Backtest should complete without error");
@@ -119,6 +120,7 @@ fn test_full_backtest_pipeline() {
         quantity: Decimal::from(1),
         strength: 1.0,
         reason: "Always long test strategy".to_string(),
+        timestamp: 0,
     });
     let result2 = engine.run().expect("Second run should also succeed");
     assert_eq!(
@@ -149,7 +151,7 @@ fn test_data_leakage_prevention() {
         risk_free_rate: 0.02,
     };
 
-    let mut engine = BacktestEngine::new(config, bars.clone());
+    let mut engine = BacktestEngine::new(config, bars.clone(), None);
 
     // Step through several bars
     for _ in 0..10 {
@@ -191,7 +193,7 @@ fn test_execution_delay_default() {
         risk_free_rate: 0.02,
     };
 
-    let mut engine = BacktestEngine::new(config, bars.clone());
+    let mut engine = BacktestEngine::new(config, bars.clone(), None);
 
     // Step through the engine bar by bar
     let mut snapshots: Vec<EngineSnapshot> = Vec::new();
@@ -206,6 +208,7 @@ fn test_execution_delay_default() {
         quantity: Decimal::from(1),
         strength: 1.0,
         reason: "Test execution delay".to_string(),
+        timestamp: 0,
     });
 
     // With execution_delay_bars = 1, signal should execute at bar 4
@@ -246,7 +249,7 @@ fn test_liquidation_trigger() {
         risk_free_rate: 0.02,
     };
 
-    let mut engine = BacktestEngine::new(config, bars.clone());
+    let mut engine = BacktestEngine::new(config, bars.clone(), None);
 
     // Step once then submit a long signal to open a position
     engine.step();
@@ -256,6 +259,7 @@ fn test_liquidation_trigger() {
         quantity: Decimal::from(1),
         strength: 1.0,
         reason: "Liquidation test".to_string(),
+        timestamp: 0,
     });
 
     let result = engine.run().expect("Backtest should complete");

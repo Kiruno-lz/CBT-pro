@@ -37,6 +37,7 @@ const TIMEFAME_MAP: Record<string, string> = {
 };
 
 const STRATEGY_ID_MAP: Record<string, string> = {
+  always_long: 'always_long',
   ema_cross: 'ema_crossover',
   rsi_macd: 'rsi_macd',
   bollinger: 'bollinger_bands',
@@ -206,6 +207,7 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
             onChange={(e) => handleChange('strategy', e.target.value)}
             className="input-field"
           >
+            <option value="always_long">Always Long</option>
             <option value="ema_cross">EMA Crossover</option>
             <option value="rsi_macd">RSI + MACD</option>
             <option value="bollinger">Bollinger Bands</option>

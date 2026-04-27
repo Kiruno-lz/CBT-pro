@@ -10,13 +10,14 @@ use orderbook::{
 };
 
 /// A trading signal emitted by a strategy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signal {
     pub action: String,
     pub symbol: String,
     pub quantity: Decimal,
     pub strength: f64,
     pub reason: String,
+    pub timestamp: i64,
 }
 
 /// Snapshot of the backtest engine state at a single bar.
@@ -41,6 +42,8 @@ pub struct EngineSnapshot {
     pub winning_trades: u64,
     pub losing_trades: u64,
     pub win_rate: f64,
+    pub signals: Vec<Signal>,
+    pub recent_trades: Vec<orderbook::OrderFill>,
 }
 
 /// Final result of a completed backtest.
@@ -97,11 +100,18 @@ pub struct BacktestEngine {
     realized_pnl_total: Decimal,
     last_day: i64,
     day_realized_pnl: Decimal,
+    strategy: Option<Box<dyn crate::strategy::Strategy>>,
+    last_signals: Vec<Signal>,
+    last_trades: Vec<OrderFill>,
 }
 
 impl BacktestEngine {
     /// Create a new backtest engine.
-    pub fn new(config: EngineConfig, bars: Vec<data_pipeline::StandardBar>) -> Self {
+    pub fn new(
+        config: EngineConfig,
+        bars: Vec<data_pipeline::StandardBar>,
+        strategy: Option<Box<dyn crate::strategy::Strategy>>,
+    ) -> Self {
         let balance = config.initial_balance;
         Self {
             config,
@@ -123,6 +133,9 @@ impl BacktestEngine {
             realized_pnl_total: Decimal::ZERO,
             last_day: 0,
             day_realized_pnl: Decimal::ZERO,
+            strategy,
+            last_signals: Vec::new(),
+            last_trades: Vec::new(),
         }
     }
 
@@ -143,6 +156,14 @@ impl BacktestEngine {
         let bar = self.bars[self.current_idx - 1].clone();
         let bar_close = bar.close;
         let bar_timestamp = bar.timestamp;
+
+        // 1.5 Strategy signal generation
+        if let Some(ref strategy) = self.strategy {
+            if let Some(signal) = strategy.on_bar(&self.bars, self.current_idx) {
+                self.last_signals.push(signal.clone());
+                self.submit_signal(signal);
+            }
+        }
 
         // 2. Process pending signals whose execute_at_idx == current_idx
         self.process_pending_signals();
@@ -204,6 +225,8 @@ impl BacktestEngine {
         self.realized_pnl_total = Decimal::ZERO;
         self.last_day = 0;
         self.day_realized_pnl = Decimal::ZERO;
+        self.last_signals.clear();
+        self.last_trades.clear();
     }
 
     /// Get the current engine state as a snapshot.
@@ -224,7 +247,7 @@ impl BacktestEngine {
             })
         };
         let equity = self.compute_equity();
-        self.build_snapshot(bar, equity)
+        self.build_snapshot_impl(bar, equity, Vec::new(), Vec::new())
     }
 
     /// Number of bars remaining after current index.
@@ -238,7 +261,12 @@ impl BacktestEngine {
     }
 
     /// Submit a signal to be executed after `execution_delay_bars`.
-    pub fn submit_signal(&mut self, signal: Signal) {
+    pub fn submit_signal(&mut self, mut signal: Signal) {
+        signal.timestamp = if self.current_idx > 0 {
+            self.bars[self.current_idx - 1].timestamp
+        } else {
+            0
+        };
         let execute_at = self.current_idx + self.config.execution_delay_bars as usize;
         self.pending_signals.push_back((execute_at, signal));
     }
@@ -261,7 +289,7 @@ impl BacktestEngine {
 
     fn process_pending_signals(&mut self) {
         let current = self.current_idx;
-        while let Some((execute_at, signal)) = self.pending_signals.front() {
+        while let Some((execute_at, _signal)) = self.pending_signals.front() {
             if *execute_at > current {
                 break;
             }
@@ -384,6 +412,7 @@ impl BacktestEngine {
     fn record_fill(&mut self, mut fill: OrderFill, pos_id: Option<PositionId>, realized: Decimal) {
         fill.position_id = pos_id;
         fill.realized_pnl = Some(realized);
+        self.last_trades.push(fill.clone());
         self.orders_history.push(fill);
         self.total_trades += 1;
         if realized > Decimal::ZERO {
@@ -457,7 +486,13 @@ impl BacktestEngine {
         self.balance + unrealized
     }
 
-    fn build_snapshot(&self, bar: data_pipeline::StandardBar, equity: Decimal) -> EngineSnapshot {
+    fn build_snapshot_impl(
+        &self,
+        bar: data_pipeline::StandardBar,
+        equity: Decimal,
+        signals: Vec<Signal>,
+        recent_trades: Vec<OrderFill>,
+    ) -> EngineSnapshot {
         let unrealized: Decimal = self
             .order_book
             .get_all_positions()
@@ -501,7 +536,15 @@ impl BacktestEngine {
             winning_trades: self.winning_trades,
             losing_trades: self.losing_trades,
             win_rate,
+            signals,
+            recent_trades,
         }
+    }
+
+    fn build_snapshot(&mut self, bar: data_pipeline::StandardBar, equity: Decimal) -> EngineSnapshot {
+        let signals = std::mem::take(&mut self.last_signals);
+        let recent_trades = std::mem::take(&mut self.last_trades);
+        self.build_snapshot_impl(bar, equity, signals, recent_trades)
     }
 
     fn build_result(&self) -> BacktestResult {
@@ -618,7 +661,7 @@ mod tests {
             ..EngineConfig::default()
         };
         let bars = generate_test_bars();
-        let mut engine = BacktestEngine::new(config, bars);
+        let mut engine = BacktestEngine::new(config, bars, None);
         for _ in 0..10 {
             let snap = engine.step();
             assert!(snap.is_some());
@@ -634,7 +677,7 @@ mod tests {
             ..EngineConfig::default()
         };
         let bars = generate_test_bars();
-        let mut engine = BacktestEngine::new(config, bars.clone());
+        let mut engine = BacktestEngine::new(config, bars.clone(), None);
         engine.step();
         let strategy_bars = engine.get_strategy_bars(10);
         // Should only have bars[0..1] after first step
@@ -651,7 +694,7 @@ mod tests {
             ..EngineConfig::default()
         };
         let bars = generate_test_bars();
-        let mut engine = BacktestEngine::new(config, bars);
+        let mut engine = BacktestEngine::new(config, bars, None);
         engine.step(); // idx=1
         engine.step(); // idx=2
         engine.step(); // idx=3
@@ -661,6 +704,7 @@ mod tests {
             quantity: dec!(0.1),
             strength: 1.0,
             reason: "test".to_string(),
+            timestamp: 0,
         });
         // Signal submitted at idx=3, executes at idx=4
         engine.step(); // idx=4, should execute
@@ -676,7 +720,7 @@ mod tests {
             ..EngineConfig::default()
         };
         let bars = generate_test_bars();
-        let mut engine = BacktestEngine::new(config, bars);
+        let mut engine = BacktestEngine::new(config, bars, None);
         engine.step();
         let snap = engine.get_state();
         assert_eq!(snap.equity, dec!(100000));
@@ -711,7 +755,7 @@ mod tests {
             initial_balance: dec!(100000),
             ..EngineConfig::default()
         };
-        let mut engine = BacktestEngine::new(config, bars);
+        let mut engine = BacktestEngine::new(config, bars, None);
         engine.run().unwrap();
         // max drawdown should be > 0 after the drop
         assert!(engine.max_drawdown_pct >= 0.0);
@@ -725,7 +769,7 @@ mod tests {
             ..EngineConfig::default()
         };
         let bars = generate_test_bars();
-        let mut engine = BacktestEngine::new(config, bars);
+        let mut engine = BacktestEngine::new(config, bars, None);
         let result = engine.run().unwrap();
         assert_eq!(result.total_trades, 0); // no signals = no trades
         assert_eq!(result.final_equity, dec!(100000));
@@ -742,7 +786,7 @@ mod tests {
             ..EngineConfig::default()
         };
         let bars = generate_test_bars();
-        let mut engine = BacktestEngine::new(config, bars);
+        let mut engine = BacktestEngine::new(config, bars, None);
         // Step a few bars
         engine.step();
         engine.step();
@@ -753,6 +797,7 @@ mod tests {
             quantity: dec!(0.5),
             strength: 1.0,
             reason: "test".to_string(),
+            timestamp: 0,
         });
         // Need to step until execution
         engine.step(); // executes open_long
@@ -766,10 +811,31 @@ mod tests {
             quantity: dec!(0.5),
             strength: 1.0,
             reason: "test".to_string(),
+            timestamp: 0,
         });
         engine.step(); // executes close
         let snap = engine.get_state();
         assert_eq!(snap.positions.len(), 0);
         assert!(snap.total_trades >= 2);
+    }
+
+    #[test]
+    fn test_strategy_generates_signals() {
+        use crate::strategy::AlwaysLong;
+        let config = EngineConfig {
+            symbol: "BTC-USDT".to_string(),
+            initial_balance: dec!(100000),
+            execution_delay_bars: 1,
+            ..EngineConfig::default()
+        };
+        let bars = generate_test_bars();
+        let strategy = Box::new(AlwaysLong::new("BTC-USDT".to_string(), dec!(0.1)));
+        let mut engine = BacktestEngine::new(config, bars, Some(strategy));
+        // Run enough steps so the strategy signals execute
+        for _ in 0..10 {
+            engine.step();
+        }
+        let snap = engine.get_state();
+        assert_eq!(snap.total_trades, 1, "AlwaysLong should generate exactly one trade");
     }
 }

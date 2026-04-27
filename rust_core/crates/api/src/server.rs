@@ -79,11 +79,49 @@ async fn start_backtest(
         Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e }))),
     };
 
-    // For MVP, generate synthetic bars if no data source is configured
-    let bars = generate_synthetic_bars(&config.symbol, 1000);
+    // Parse timeframe
+    let timeframe_str = payload.get("timeframe").and_then(|v| v.as_str()).unwrap_or("1m");
+    let timeframe = TimeFrame::from_string(timeframe_str).unwrap_or(TimeFrame::M1);
+
+    // Determine bar count from date range if provided
+    let start_time = payload.get("start_time").and_then(|v| v.as_i64()).unwrap_or(1704067200000);
+    let end_time = payload.get("end_time").and_then(|v| v.as_i64()).unwrap_or(1735689600000);
+    let duration_ms = (end_time - start_time).max(0);
+    let step_ms = timeframe.as_seconds() * 1000;
+    let count = ((duration_ms / step_ms) as usize).max(100).min(10000);
+
+    let bars = generate_synthetic_bars(&config.symbol, count, timeframe);
     let total_bars = bars.len();
 
-    let engine = BacktestEngine::new(config, bars);
+    // Build strategy
+    let strategy_id = payload.get("strategy_id").and_then(|v| v.as_str()).unwrap_or("always_long");
+    let strategy: Option<Box<dyn engine::Strategy>> = match strategy_id {
+        "always_long" => Some(Box::new(engine::AlwaysLong::new(
+            config.symbol.clone(),
+            Decimal::from_str("0.1").unwrap(),
+        ))),
+        "ema_crossover" => Some(Box::new(engine::EmaCrossover {
+            symbol: config.symbol.clone(),
+            quantity: Decimal::from_str("0.1").unwrap(),
+            fast_period: 9,
+            slow_period: 21,
+        })),
+        "rsi_macd" => Some(Box::new(engine::RsiMacd {
+            symbol: config.symbol.clone(),
+            quantity: Decimal::from_str("0.1").unwrap(),
+        })),
+        "bollinger_bands" => Some(Box::new(engine::StrategyBollingerBands {
+            symbol: config.symbol.clone(),
+            quantity: Decimal::from_str("0.1").unwrap(),
+        })),
+        "breakout" => Some(Box::new(engine::Breakout {
+            symbol: config.symbol.clone(),
+            quantity: Decimal::from_str("0.1").unwrap(),
+        })),
+        _ => None,
+    };
+
+    let engine = BacktestEngine::new(config, bars, strategy);
     state.lock().await.insert(backtest_id.clone(), engine);
 
     Ok(Json(StartBacktestResponse {
@@ -217,15 +255,37 @@ async fn get_indicators(
 }
 
 fn parse_engine_config(payload: &Value) -> Result<EngineConfig, String> {
-    // Simplified config parsing for MVP
-    let symbol = payload.get("config").and_then(|c| c.get("symbol")).and_then(|s| s.as_str()).unwrap_or("BTC-USDT").to_string();
-    let initial_balance = Decimal::from_str(payload.get("config").and_then(|c| c.get("initial_balance")).and_then(|v| v.as_str()).unwrap_or("100000")).unwrap_or_else(|_| Decimal::from(100000));
+    let config_obj = payload.get("config").ok_or("missing config field")?;
+
+    let symbol = config_obj
+        .get("symbol")
+        .and_then(|s| s.as_str())
+        .unwrap_or("BTC-USDT")
+        .to_string();
+
+    let initial_balance = config_obj
+        .get("initial_balance")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Decimal::from_str(s).ok())
+        .unwrap_or_else(|| Decimal::from(100000));
+
+    let margin_mode = match config_obj.get("margin_mode").and_then(|v| v.as_str()) {
+        Some("Isolated") => MarginMode::Isolated,
+        Some("Cross") => MarginMode::Cross,
+        _ => MarginMode::Cross,
+    };
+
+    let default_leverage = config_obj
+        .get("default_leverage")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Decimal::from_str(s).ok())
+        .unwrap_or_else(|| Decimal::from(10));
 
     Ok(EngineConfig {
         symbol,
         initial_balance,
-        margin_mode: MarginMode::Cross,
-        default_leverage: Decimal::from(10),
+        margin_mode,
+        default_leverage,
         maker_fee_rate: Decimal::from_str("0.0002").unwrap(),
         taker_fee_rate: Decimal::from_str("0.0005").unwrap(),
         maintenance_margin_rate: Decimal::from_str("0.004").unwrap(),
@@ -267,7 +327,8 @@ fn parse_order_request(payload: Value) -> Result<OrderRequest, String> {
     })
 }
 
-fn generate_synthetic_bars(symbol: &str, count: usize) -> Vec<StandardBar> {
+fn generate_synthetic_bars(symbol: &str, count: usize, timeframe: TimeFrame) -> Vec<StandardBar> {
+    let step_ms = timeframe.as_seconds() * 1000;
     let mut bars = Vec::with_capacity(count);
     let mut rng = SmallRng::seed_from_u64(42);
     let mut price = Decimal::from(40000);
@@ -281,7 +342,7 @@ fn generate_synthetic_bars(symbol: &str, count: usize) -> Vec<StandardBar> {
         let low = open.min(close) - low_offset;
         let volume = Decimal::from(rng.gen_range(50i64..=500i64));
         bars.push(StandardBar {
-            timestamp: 1704067200000 + i as i64 * 60000,
+            timestamp: 1704067200000 + i as i64 * step_ms,
             open,
             high,
             low,
@@ -302,7 +363,7 @@ mod tests {
 
     #[test]
     fn test_generate_synthetic_bars_no_short_cycle() {
-        let bars = generate_synthetic_bars("BTC-USDT", 1000);
+        let bars = generate_synthetic_bars("BTC-USDT", 1000, TimeFrame::M1);
         let closes: Vec<Decimal> = bars.iter().map(|b| b.close).collect();
         let volumes: Vec<Decimal> = bars.iter().map(|b| b.volume).collect();
 
@@ -316,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_generate_synthetic_bars_ohlcv_relationships() {
-        let bars = generate_synthetic_bars("BTC-USDT", 1000);
+        let bars = generate_synthetic_bars("BTC-USDT", 1000, TimeFrame::M1);
         // 验证每根K线的OHLC关系
         for (i, bar) in bars.iter().enumerate() {
             assert!(bar.high >= bar.open, "Bar {}: high < open", i);
@@ -329,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_generate_synthetic_bars_random_walk() {
-        let bars = generate_synthetic_bars("BTC-USDT", 100);
+        let bars = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1);
         // 验证价格不是单调递增的（随机漫步应该有涨有跌）
         let mut has_up = false;
         let mut has_down = false;
@@ -348,8 +409,8 @@ mod tests {
     #[test]
     fn test_generate_synthetic_bars_deterministic() {
         // 使用相同seed应该生成完全相同的序列
-        let bars1 = generate_synthetic_bars("BTC-USDT", 100);
-        let bars2 = generate_synthetic_bars("BTC-USDT", 100);
+        let bars1 = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1);
+        let bars2 = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1);
         assert_eq!(bars1.len(), bars2.len());
         for (a, b) in bars1.iter().zip(bars2.iter()) {
             assert_eq!(a.timestamp, b.timestamp);
@@ -410,5 +471,48 @@ mod tests {
             }
         }
         false
+    }
+
+    #[test]
+    fn test_generate_synthetic_bars_respects_timeframe() {
+        let bars = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::H1);
+        assert_eq!(bars.len(), 100);
+        for window in bars.windows(2) {
+            let diff = window[1].timestamp - window[0].timestamp;
+            assert_eq!(diff, 3600 * 1000, "H1 bars should be spaced by 3600s");
+        }
+    }
+
+    #[test]
+    fn test_start_backtest_with_timeframe() {
+        let payload = serde_json::json!({
+            "config": {
+                "symbol": "ETH-USDT",
+                "initial_balance": "5000",
+                "margin_mode": "Isolated",
+                "default_leverage": "20"
+            },
+            "strategy_id": "ema_crossover",
+            "timeframe": "1h",
+            "start_time": 1704067200000i64,
+            "end_time": 1706659200000i64
+        });
+
+        let config = parse_engine_config(&payload).unwrap();
+        assert_eq!(config.symbol, "ETH-USDT");
+        assert_eq!(config.initial_balance, Decimal::from(5000));
+        assert_eq!(config.margin_mode, MarginMode::Isolated);
+        assert_eq!(config.default_leverage, Decimal::from(20));
+
+        let tf = TimeFrame::from_string(payload.get("timeframe").unwrap().as_str().unwrap()).unwrap();
+        assert_eq!(tf, TimeFrame::H1);
+
+        let start_time = payload.get("start_time").unwrap().as_i64().unwrap();
+        let end_time = payload.get("end_time").unwrap().as_i64().unwrap();
+        let step_ms = tf.as_seconds() * 1000;
+        let count = ((end_time - start_time) / step_ms) as usize;
+        let bars = generate_synthetic_bars(&config.symbol, count, tf);
+        assert!(!bars.is_empty());
+        assert_eq!(bars[1].timestamp - bars[0].timestamp, step_ms);
     }
 }
