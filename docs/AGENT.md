@@ -6,7 +6,7 @@
 |-------|--------|---------------|
 | Data_Pipeline | `data_pipeline/` | `engine/` internals, `orderbook/` logic |
 | Backtest_Engine | `engine/`, `orderbook/`, `indicators/` | `data_pipeline/` storage internals |
-| Strategy | `api/`, `python_strategies/` | `engine/` internals, `orderbook/` direct access |
+| Strategy | `api/` | `engine/` internals, `orderbook/` direct access |
 | Frontend | `frontend/` | Any backend logic |
 | DevOps | `.github/`, `docs/`, `docker-compose.yml` | Application code |
 
@@ -40,17 +40,6 @@ pub trait OrderBookManager {
 }
 ```
 
-### Engine -> Strategy (Python)
-
-```python
-class BaseStrategy(ABC):
-    @abstractmethod
-    def on_bar(self, bar: StandardBar, context: StrategyContext) -> Optional[Signal]: ...
-    
-    @abstractmethod
-    def on_position_update(self, position: PositionSnapshot, context: StrategyContext) -> Optional[Signal]: ...
-```
-
 ### API -> Frontend (WebSocket)
 
 ```typescript
@@ -76,5 +65,5 @@ type WsMessage =
 |-------|-------|
 | Data_Pipeline | Aggregation M1->M5, Parquet roundtrip, PostgreSQL queries |
 | Backtest_Engine | Position math, FIFO/LIFO, margin calc, liquidation trigger, data leakage detection |
-| Strategy | Full backtest pipeline, EMA Cross known signals |
+| Strategy | EMA Cross known signals |
 | Frontend | WASM data conversion, chart 10k bars at 60FPS, playback controls |

@@ -4,7 +4,6 @@
 
 CBT-Pro (Crypto Backtester Professional) is an institutional-grade cryptocurrency quantitative backtesting system with a hybrid architecture:
 - **Rust Core**: High-performance backtest engine, order book management, data pipeline, API gateway
-- **Python Layer**: Strategy development, technical indicators, data analysis
 - **TypeScript Frontend**: Visualization, playback controls, real-time signal tracking
 
 ---
@@ -22,17 +21,7 @@ workspace/
 │   └── api/                # Axum HTTP + WebSocket gateway
 ```
 
-### 2.2 Python Package (`python_strategies/`)
-```
-cbt_pro/
-├── interfaces/             # Abstract base classes
-├── strategies/             # Strategy implementations
-├── indicators/             # Python indicator wrappers
-├── backtest_client/        # HTTP SDK for Rust engine
-└── utils/                  # Utilities
-```
-
-### 2.3 Frontend (`frontend/`)
+### 2.2 Frontend (`frontend/`)
 ```
 src/
 ├── components/             # React components
@@ -190,59 +179,60 @@ pub struct EngineSnapshot {
 }
 ```
 
-### 3.6 Signal (Python ↔ Rust)
-```python
-class SignalAction(Enum):
-    OPEN_LONG = "open_long"
-    OPEN_SHORT = "open_short"
-    ADD_LONG = "add_long"
-    ADD_SHORT = "add_short"
-    REDUCE_LONG = "reduce_long"
-    REDUCE_SHORT = "reduce_short"
-    CLOSE_LONG = "close_long"
-    CLOSE_SHORT = "close_short"
-    CLOSE_ALL = "close_all"
+### 3.6 Signal
+```rust
+pub enum SignalAction {
+    OpenLong,
+    OpenShort,
+    AddLong,
+    AddShort,
+    ReduceLong,
+    ReduceShort,
+    CloseLong,
+    CloseShort,
+    CloseAll,
+}
 
-@dataclass
-class Signal:
-    action: SignalAction
-    symbol: str
-    quantity: Decimal
-    strength: float          # 0.0 - 1.0
-    reason: str
-    metadata: Dict[str, Any]
-    take_profit: Optional[Decimal] = None
-    stop_loss: Optional[Decimal] = None
+pub struct Signal {
+    pub action: SignalAction,
+    pub symbol: String,
+    pub quantity: Decimal,
+    pub strength: f64,          // 0.0 - 1.0
+    pub reason: String,
+    pub metadata: HashMap<String, serde_json::Value>,
+    pub take_profit: Option<Decimal>,
+    pub stop_loss: Option<Decimal>,
+}
 ```
 
 ### 3.7 StrategyContext (Read-Only to Strategies)
-```python
-@dataclass
-class PositionSnapshot:
-    id: str
-    symbol: str
-    direction: str
-    current_size: Decimal
-    average_entry_price: Decimal
-    unrealized_pnl: Decimal
-    realized_pnl: Decimal
-    leverage: Decimal
-    margin_used: Decimal
-    opened_at: int
+```rust
+pub struct PositionSnapshot {
+    pub id: String,
+    pub symbol: String,
+    pub direction: String,
+    pub current_size: Decimal,
+    pub average_entry_price: Decimal,
+    pub unrealized_pnl: Decimal,
+    pub realized_pnl: Decimal,
+    pub leverage: Decimal,
+    pub margin_used: Decimal,
+    pub opened_at: i64,
+}
 
-@dataclass
-class StrategyContext:
-    current_price: Decimal
-    open_orders: int
-    positions: List[PositionSnapshot]
-    equity: Decimal
-    available_balance: Decimal
-    unrealized_pnl: Decimal
-    margin_ratio: Decimal
-    bar_history: List[StandardBar]
-    current_bar_index: int
-    total_bars: int
-    timestamp: int
+pub struct StrategyContext {
+    pub current_price: Decimal,
+    pub open_orders: i32,
+    pub positions: Vec<PositionSnapshot>,
+    pub equity: Decimal,
+    pub available_balance: Decimal,
+    pub unrealized_pnl: Decimal,
+    pub margin_ratio: Decimal,
+    pub bar_history: Vec<StandardBar>,
+    pub current_bar_index: usize,
+    pub total_bars: usize,
+    pub timestamp: i64,
+}
 ```
 
 ---
@@ -407,122 +397,9 @@ pub struct EngineConfig {
 
 ---
 
-## 6. Protocol Buffer Schema (proto/cbt_pro.proto)
+## 6. Frontend State Management
 
-```protobuf
-syntax = "proto3";
-package cbt_pro;
-
-message StandardBar {
-    int64 timestamp = 1;
-    string open = 2;
-    string high = 3;
-    string low = 4;
-    string close = 5;
-    string volume = 6;
-    string symbol = 7;
-    string exchange = 8;
-    bool confirmed = 9;
-}
-
-message Position {
-    string id = 1;
-    string symbol = 2;
-    string direction = 3;
-    string status = 4;
-    repeated PositionLeg entries = 5;
-    string current_size = 6;
-    string average_entry_price = 7;
-    string realized_pnl = 8;
-    string unrealized_pnl = 9;
-    int64 opened_at = 10;
-    int64 updated_at = 11;
-}
-
-message PositionLeg {
-    string entry_price = 1;
-    string quantity = 2;
-    int64 timestamp = 3;
-    string order_id = 4;
-}
-
-message OrderRequest {
-    string order_id = 1;
-    string symbol = 2;
-    string side = 3;
-    string direction = 4;
-    string order_type = 5;
-    string limit_price = 6;
-    string stop_price = 7;
-    string quantity = 8;
-    string margin_mode = 9;
-    string leverage = 10;
-    int64 timestamp = 11;
-    string strategy_id = 12;
-    double signal_strength = 13;
-    string signal_reason = 14;
-}
-
-message EngineSnapshot {
-    int64 timestamp = 1;
-    StandardBar current_bar = 2;
-    string equity = 3;
-    string available_balance = 4;
-    string margin_used = 5;
-    string margin_ratio = 6;
-    string unrealized_pnl = 7;
-    string realized_pnl_today = 8;
-    repeated Position positions = 9;
-    int64 total_trades = 10;
-    double win_rate = 11;
-    double max_drawdown_pct = 12;
-    double sharpe_ratio = 13;
-}
-```
-
----
-
-## 7. Strategy Interface (Python)
-
-```python
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
-from decimal import Decimal
-
-class BaseStrategy(ABC):
-    @property
-    @abstractmethod
-    def name(self) -> str: ...
-
-    @property
-    @abstractmethod
-    def version(self) -> str: ...
-
-    @property
-    @abstractmethod
-    def required_indicators(self) -> List[str]: ...
-
-    @abstractmethod
-    def on_bar(self, bar: StandardBar, context: StrategyContext) -> Optional[Signal]:
-        """Called on every bar close. Must NOT perform I/O."""
-        ...
-
-    @abstractmethod
-    def on_position_update(self, position: PositionSnapshot, context: StrategyContext) -> Optional[Signal]:
-        """Called when position state changes."""
-        ...
-
-    def get_parameters(self) -> Dict[str, Any]:
-        """Return configurable parameters with defaults."""
-        return {}
-```
-
----
-
-## 8. Frontend State Management
-
-### 8.1 Zustand Store Structure
+### 6.1 Zustand Store Structure
 ```typescript
 interface AppState {
     // Connection
@@ -557,7 +434,7 @@ interface AppState {
 }
 ```
 
-### 8.2 WebSocket Message Types
+### 6.2 WebSocket Message Types
 ```typescript
 type WsMessage =
     | { type: 'snapshot'; data: EngineSnapshot }
@@ -570,41 +447,36 @@ type WsMessage =
 
 ---
 
-## 9. Testing Requirements
+## 7. Testing Requirements
 
-### 9.1 Unit Tests (Rust)
+### 7.1 Unit Tests (Rust)
 - `orderbook`: Position open/add/reduce/close, FIFO/LIFO math, margin calc
 - `engine`: Bar-by-bar execution, no data leakage, liquidation trigger
 - `data_pipeline`: Aggregation M1→M5, Parquet roundtrip, PostgreSQL queries
 - `indicators`: EMA, RSI, Bollinger math verified against known values
 
-### 9.2 Integration Tests (Python + Rust)
+### 7.2 Integration Tests
 - Full backtest pipeline: Data → Engine → Strategy → Result
 - EMA Cross strategy on 2017 BTC data with known expected signals
 
-### 9.3 Data Leakage Tests
+### 7.3 Data Leakage Tests
 - Strategy accessing `bars[current_idx+1]` must panic/error
 - Signal generated on bar N must execute on bar N+1 (configurable)
 - Lookahead check: verify strategy only sees `bars[..current_idx]`
 
-### 9.4 Frontend Tests
+### 7.4 Frontend Tests
 - WASM module loads and converts data correctly
 - Chart renders 10k bars at 60FPS
 - Playback controls update state correctly
 
 ---
 
-## 10. Build Requirements
+## 8. Build Requirements
 
 ### Rust
 - Edition: 2021
 - Key crates: tokio, axum, serde, rust_decimal, sqlx, parquet, arrow, uuid, chrono, thiserror, tracing
 - Each crate must compile independently: `cargo check -p <crate>`
-
-### Python
-- Version: 3.11+
-- Dependencies: pydantic, aiohttp, pandas, numpy, (ta-lib optional)
-- Type checking: mypy strict mode
 
 ### Frontend
 - Node: 20+
@@ -614,7 +486,7 @@ type WsMessage =
 
 ---
 
-## 11. Docker Services
+## 9. Docker Services
 
 ```yaml
 services:
@@ -645,18 +517,17 @@ services:
 
 ---
 
-## 12. CI/CD Requirements
+## 10. CI/CD Requirements
 
 ### GitHub Actions Workflow (`.github/workflows/ci.yml`)
 1. **Rust**: `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --workspace`
-2. **Python**: `ruff check .`, `mypy cbt_pro/`, `pytest`
-3. **Frontend**: `tsc --noEmit`, `eslint .`, `vitest run`
-4. **Coverage**: Rust core >80%, Python >60%
-5. **Triggers**: PR to `main` or `develop`
+2. **Frontend**: `tsc --noEmit`, `eslint .`, `vitest run`
+3. **Coverage**: Rust core >80%
+4. **Triggers**: PR to `main` or `develop`
 
 ---
 
-## 13. Anti-Data-Leakage Rules (CRITICAL)
+## 11. Anti-Data-Leakage Rules (CRITICAL)
 
 1. **Lookahead Barrier**: The engine MUST maintain `current_idx` and NEVER expose `bars[current_idx..]` to the strategy during `on_bar()`.
 2. **Execution Delay**: All signals generated at bar `N` execute at bar `N + execution_delay_bars` (default 1).
@@ -666,13 +537,13 @@ services:
 
 ---
 
-## 14. Agent Implementation Boundaries
+## 12. Agent Implementation Boundaries
 
 | Agent | Crate/Module | Must NOT Touch |
 |-------|-------------|--------------|
 | Data_Pipeline | `data_pipeline/` | `engine/`, `orderbook/` logic |
 | Backtest_Engine | `engine/`, `orderbook/`, `indicators/` | `data_pipeline/` storage internals |
-| Strategy | `api/`, `python_strategies/` | `engine/` internals, `orderbook/` direct access |
+| Strategy | `api/` | `engine/` internals, `orderbook/` direct access |
 | Frontend | `frontend/` | Any backend logic |
 | DevOps | `.github/`, `docs/`, `docker-compose.yml` | Application code |
 
