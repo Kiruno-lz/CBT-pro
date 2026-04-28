@@ -270,6 +270,16 @@ impl BacktestEngine {
         self.pending_signals.push_back((execute_at, signal));
     }
 
+    /// Get all bars in the backtest.
+    pub fn bars(&self) -> &[data_pipeline::StandardBar] {
+        &self.bars
+    }
+
+    /// Get bars processed so far (up to current_idx).
+    pub fn processed_bars(&self) -> &[data_pipeline::StandardBar] {
+        &self.bars[..self.current_idx]
+    }
+
     /// Get bars available to strategy (strictly before current_idx).
     ///
     /// # Panics
@@ -655,6 +665,50 @@ mod tests {
             });
         }
         bars
+    }
+
+    #[test]
+    fn test_bars_getter() {
+        let config = EngineConfig {
+            symbol: "BTC-USDT".to_string(),
+            initial_balance: dec!(100000),
+            ..EngineConfig::default()
+        };
+        let bars = generate_test_bars();
+        let engine = BacktestEngine::new(config, bars.clone(), None);
+        let retrieved = engine.bars();
+        assert_eq!(retrieved.len(), bars.len());
+        assert_eq!(retrieved[0].close, bars[0].close);
+        assert_eq!(retrieved.last().unwrap().close, bars.last().unwrap().close);
+    }
+
+    #[test]
+    fn test_processed_bars() {
+        let config = EngineConfig {
+            symbol: "BTC-USDT".to_string(),
+            initial_balance: dec!(100000),
+            ..EngineConfig::default()
+        };
+        let bars = generate_test_bars();
+        let mut engine = BacktestEngine::new(config, bars.clone(), None);
+        
+        // Before stepping, processed_bars should be empty
+        let processed_before = engine.processed_bars();
+        assert_eq!(processed_before.len(), 0, "processed_bars should be empty before stepping");
+        
+        // Step 10 bars
+        for _ in 0..10 {
+            engine.step();
+        }
+        
+        // After stepping, processed_bars should have 10 bars
+        let processed_after = engine.processed_bars();
+        assert_eq!(processed_after.len(), 10, "processed_bars should have 10 bars after stepping 10 times");
+        assert_eq!(processed_after[0].close, bars[0].close);
+        assert_eq!(processed_after[9].close, bars[9].close);
+        
+        // Total bars should still be 100
+        assert_eq!(engine.bars().len(), 100, "bars() should still return all bars");
     }
 
     #[test]

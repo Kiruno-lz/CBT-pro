@@ -9,7 +9,7 @@ interface PlaybackPanelProps {
 const SPEED_OPTIONS: Array<number | 'max'> = [0.5, 1, 3, 10, 'max'];
 
 export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
-  const { playback, setPlayback } = useAppStore();
+  const { playback, setPlayback, currentStrategy } = useAppStore();
   const { status, speed } = playback;
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -136,6 +136,22 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
             ))}
           </div>
         </div>
+
+        {currentStrategy && (
+          <div className="bg-surface-raised rounded p-3 space-y-2">
+            <div className="text-xs font-medium text-text-primary">{currentStrategy.name}</div>
+            {Object.entries(currentStrategy.default_params).length > 0 && (
+              <div className="space-y-1">
+                {Object.entries(currentStrategy.default_params).map(([key, value]) => (
+                  <div key={key} className="flex justify-between text-xs">
+                    <span className="text-text-secondary">{key}</span>
+                    <span className="font-mono text-text-primary">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2 text-center">
           <div className="bg-surface-raised rounded p-2">

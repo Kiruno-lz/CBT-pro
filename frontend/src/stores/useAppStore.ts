@@ -8,6 +8,7 @@ import type {
   PlaybackState,
   TimeFrame,
   BacktestResult,
+  StrategyDefaults,
 } from '../types';
 
 export interface AppState {
@@ -24,6 +25,8 @@ export interface AppState {
   visibleRange: { from: number; to: number };
   markerVisibility: boolean;
   backtestResult: BacktestResult | null;
+  backtestId: string | null;
+  currentStrategy: StrategyDefaults | null;
 }
 
 export interface AppActions {
@@ -43,6 +46,8 @@ export interface AppActions {
   setVisibleRange: (range: { from: number; to: number }) => void;
   setMarkerVisibility: (visible: boolean) => void;
   setBacktestResult: (result: BacktestResult | null) => void;
+  setBacktestId: (id: string | null) => void;
+  setCurrentStrategy: (strategy: StrategyDefaults | null) => void;
   reset: () => void;
 }
 
@@ -77,6 +82,8 @@ const initialState: AppState = {
   visibleRange: { from: 0, to: 0 },
   markerVisibility: true,
   backtestResult: null,
+  backtestId: null,
+  currentStrategy: null,
 };
 
 export const useAppStore = create<AppState & AppActions>((set) => ({
@@ -137,5 +144,7 @@ export const useAppStore = create<AppState & AppActions>((set) => ({
   setVisibleRange: (range) => set({ visibleRange: range }),
   setMarkerVisibility: (visible) => set({ markerVisibility: visible }),
   setBacktestResult: (result) => set({ backtestResult: result }),
+  setBacktestId: (id) => set({ backtestId: id }),
+  setCurrentStrategy: (strategy) => set({ currentStrategy: strategy }),
   reset: () => set(initialState),
 }));

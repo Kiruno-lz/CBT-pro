@@ -115,6 +115,58 @@ export interface IndicatorConfig {
   panel: 'main' | 'sub';
 }
 
+export interface ParamTypeInteger {
+  min: number;
+  max: number;
+  default: number;
+}
+
+export interface ParamTypeDecimal {
+  min: string;
+  max: string;
+  default: string;
+}
+
+export interface ParamTypeString {
+  default: string;
+  options: string[];
+}
+
+export interface ParamDefinition {
+  name: string;
+  description: string;
+  param_type: {
+    Integer?: ParamTypeInteger;
+    Decimal?: ParamTypeDecimal;
+    String?: ParamTypeString;
+  };
+}
+
+export interface StrategyDefaults {
+  id: string;
+  name: string;
+  description: string;
+  default_params: Record<string, unknown>;
+  param_definitions: ParamDefinition[];
+}
+
+export interface IndicatorValue {
+  value?: string;
+  upper?: string;
+  middle?: string;
+  lower?: string;
+  macd?: string;
+  signal?: string;
+  histogram?: string;
+  timestamp: number;
+}
+
+export type IndicatorSeries = IndicatorValue[];
+
+export interface IndicatorsResponse {
+  [key: string]: IndicatorValue | IndicatorSeries;
+}
+
 export interface AppState {
   wsConnected: boolean;
   engineOnline: boolean;
@@ -129,6 +181,8 @@ export interface AppState {
   visibleRange: { from: number; to: number };
   markerVisibility: boolean;
   backtestResult: BacktestResult | null;
+  backtestId: string | null;
+  currentStrategy: StrategyDefaults | null;
 }
 
 export interface AppActions {
@@ -148,6 +202,8 @@ export interface AppActions {
   setVisibleRange: (range: { from: number; to: number }) => void;
   setMarkerVisibility: (visible: boolean) => void;
   setBacktestResult: (result: BacktestResult | null) => void;
+  setBacktestId: (id: string | null) => void;
+  setCurrentStrategy: (strategy: StrategyDefaults | null) => void;
   reset: () => void;
 }
 
