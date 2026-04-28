@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 engine = { path = "../engine" }
+strategy = { path = "../strategy" }
 orderbook = { path = "../orderbook" }
 data_pipeline = { path = "../data_pipeline" }
 rust_decimal = { workspace = true }

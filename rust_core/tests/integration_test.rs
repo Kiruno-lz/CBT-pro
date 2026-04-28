@@ -1,5 +1,6 @@
 use data_pipeline::StandardBar;
-use engine::{BacktestEngine, EngineConfig, EngineSnapshot, Signal};
+use engine::{BacktestEngine, EngineConfig, EngineSnapshot};
+use strategy::{Signal, SignalAction};
 use orderbook::{CostBasisMethod, MarginMode};
 use rust_decimal::Decimal;
 
@@ -57,6 +58,7 @@ fn test_full_backtest_pipeline() {
         initial_balance: Decimal::from(100000),
         margin_mode: MarginMode::Cross,
         default_leverage: Decimal::from(1),
+        default_quantity: Decimal::from(1),
         maker_fee_rate: Decimal::new(1, 3),
         taker_fee_rate: Decimal::new(5, 3),
         maintenance_margin_rate: Decimal::new(5, 3),
@@ -73,12 +75,13 @@ fn test_full_backtest_pipeline() {
     // after the first bar (mirrors old behaviour: signal at current_bar_index == 1).
     engine.step();
     engine.submit_signal(Signal {
-        action: "open_long".to_string(),
+        action: SignalAction::OpenLong,
         symbol: "BTC-USDT".to_string(),
-        quantity: Decimal::from(1),
+        quantity: Some(Decimal::from(1)),
         strength: 1.0,
         reason: "Always long test strategy".to_string(),
-        timestamp: 0,
+        stop_loss: None,
+        take_profit: None,
     });
 
     let result = engine.run().expect("Backtest should complete without error");
@@ -115,12 +118,13 @@ fn test_full_backtest_pipeline() {
     engine.reset();
     engine.step();
     engine.submit_signal(Signal {
-        action: "open_long".to_string(),
+        action: SignalAction::OpenLong,
         symbol: "BTC-USDT".to_string(),
-        quantity: Decimal::from(1),
+        quantity: Some(Decimal::from(1)),
         strength: 1.0,
         reason: "Always long test strategy".to_string(),
-        timestamp: 0,
+        stop_loss: None,
+        take_profit: None,
     });
     let result2 = engine.run().expect("Second run should also succeed");
     assert_eq!(
@@ -141,6 +145,7 @@ fn test_data_leakage_prevention() {
         initial_balance: Decimal::from(100000),
         margin_mode: MarginMode::Cross,
         default_leverage: Decimal::from(1),
+        default_quantity: Decimal::from(1),
         maker_fee_rate: Decimal::new(1, 3),
         taker_fee_rate: Decimal::new(5, 3),
         maintenance_margin_rate: Decimal::new(5, 3),
@@ -183,6 +188,7 @@ fn test_execution_delay_default() {
         initial_balance: Decimal::from(100000),
         margin_mode: MarginMode::Cross,
         default_leverage: Decimal::from(1),
+        default_quantity: Decimal::from(1),
         maker_fee_rate: Decimal::new(1, 3),
         taker_fee_rate: Decimal::new(5, 3),
         maintenance_margin_rate: Decimal::new(5, 3),
@@ -203,12 +209,13 @@ fn test_execution_delay_default() {
 
     // Submit a signal at current state (after 3 steps, current_idx == 3)
     engine.submit_signal(Signal {
-        action: "open_long".to_string(),
+        action: SignalAction::OpenLong,
         symbol: "BTC-USDT".to_string(),
-        quantity: Decimal::from(1),
+        quantity: Some(Decimal::from(1)),
         strength: 1.0,
         reason: "Test execution delay".to_string(),
-        timestamp: 0,
+        stop_loss: None,
+        take_profit: None,
     });
 
     // With execution_delay_bars = 1, signal should execute at bar 4
@@ -239,6 +246,7 @@ fn test_liquidation_trigger() {
         initial_balance: Decimal::from(1000),
         margin_mode: MarginMode::Cross,
         default_leverage: Decimal::from(100), // Extreme leverage to force liquidation
+        default_quantity: Decimal::from(1),
         maker_fee_rate: Decimal::new(1, 3),
         taker_fee_rate: Decimal::new(5, 3),
         maintenance_margin_rate: Decimal::new(5, 3),
@@ -254,12 +262,13 @@ fn test_liquidation_trigger() {
     // Step once then submit a long signal to open a position
     engine.step();
     engine.submit_signal(Signal {
-        action: "open_long".to_string(),
+        action: SignalAction::OpenLong,
         symbol: "BTC-USDT".to_string(),
-        quantity: Decimal::from(1),
+        quantity: Some(Decimal::from(1)),
         strength: 1.0,
         reason: "Liquidation test".to_string(),
-        timestamp: 0,
+        stop_loss: None,
+        take_profit: None,
     });
 
     let result = engine.run().expect("Backtest should complete");

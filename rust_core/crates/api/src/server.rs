@@ -14,6 +14,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use engine::{BacktestEngine, EngineConfig, EngineSnapshot, BacktestResult};
+use strategy::{AlwaysLong, EmaCrossover, RsiMacd, BollingerBands, Breakout};
 use orderbook::{OrderRequest, OrderFill, OrderSide, Direction, OrderType, MarginMode};
 use data_pipeline::{StandardBar, TimeFrame};
 use rust_decimal::Decimal;
@@ -95,26 +96,26 @@ async fn start_backtest(
 
     // Build strategy
     let strategy_id = payload.get("strategy_id").and_then(|v| v.as_str()).unwrap_or("always_long");
-    let strategy: Option<Box<dyn engine::Strategy>> = match strategy_id {
-        "always_long" => Some(Box::new(engine::AlwaysLong::new(
+    let strategy: Option<Box<dyn strategy::Strategy>> = match strategy_id {
+        "always_long" => Some(Box::new(strategy::AlwaysLong::new(
             config.symbol.clone(),
             Decimal::from_str("0.1").unwrap(),
         ))),
-        "ema_crossover" => Some(Box::new(engine::EmaCrossover {
+        "ema_crossover" => Some(Box::new(strategy::EmaCrossover {
             symbol: config.symbol.clone(),
             quantity: Decimal::from_str("0.1").unwrap(),
             fast_period: 9,
             slow_period: 21,
         })),
-        "rsi_macd" => Some(Box::new(engine::RsiMacd {
+        "rsi_macd" => Some(Box::new(strategy::RsiMacd {
             symbol: config.symbol.clone(),
             quantity: Decimal::from_str("0.1").unwrap(),
         })),
-        "bollinger_bands" => Some(Box::new(engine::StrategyBollingerBands {
+        "bollinger_bands" => Some(Box::new(strategy::BollingerBands {
             symbol: config.symbol.clone(),
             quantity: Decimal::from_str("0.1").unwrap(),
         })),
-        "breakout" => Some(Box::new(engine::Breakout {
+        "breakout" => Some(Box::new(strategy::Breakout {
             symbol: config.symbol.clone(),
             quantity: Decimal::from_str("0.1").unwrap(),
         })),
@@ -286,6 +287,7 @@ fn parse_engine_config(payload: &Value) -> Result<EngineConfig, String> {
         initial_balance,
         margin_mode,
         default_leverage,
+        default_quantity: Decimal::from_str("0.1").unwrap(),
         maker_fee_rate: Decimal::from_str("0.0002").unwrap(),
         taker_fee_rate: Decimal::from_str("0.0005").unwrap(),
         maintenance_margin_rate: Decimal::from_str("0.004").unwrap(),
