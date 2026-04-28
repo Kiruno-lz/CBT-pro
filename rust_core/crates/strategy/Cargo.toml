@@ -6,8 +6,10 @@ edition = "2021"
 [dependencies]
 orderbook = { path = "../orderbook" }
 data_pipeline = { path = "../data_pipeline" }
+indicators = { path = "../indicators" }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

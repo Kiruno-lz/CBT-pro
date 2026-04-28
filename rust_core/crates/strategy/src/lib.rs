@@ -1,4 +1,5 @@
 pub mod base;
+pub mod config;
 pub mod error;
 
 // Re-export strategy implementations
@@ -9,6 +10,7 @@ pub mod bollinger_bands;
 pub mod breakout;
 
 pub use base::{Strategy, StrategyContext, Signal, SignalAction};
+pub use config::{ParamType, ParamDefinition, StrategyInfo, available_strategies};
 pub use error::StrategyError;
 pub use always_long::AlwaysLong;
 pub use ema_crossover::EmaCrossover;

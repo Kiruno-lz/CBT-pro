@@ -138,9 +138,9 @@ pub mod my_strategy;
 pub use my_strategy::MyStrategy;
 ```
 
-### Step 5 — Register in the API layer
+### Step 5 — Register in the strategy registry
 
-Open `rust_core/crates/api/src/server.rs` and add a new arm to the `match strategy_id` block (see Section 8).
+Add your strategy to the `available_strategies()` function in `rust_core/crates/strategy/src/config.rs` (see Section 8).
 
 ---
 
@@ -217,7 +217,243 @@ pub enum SignalAction {
 
 ---
 
-## 6. Code Examples
+## 6. Indicator Usage Rule
+
+All indicator-based strategies **MUST** use the `indicators` crate instead of computing indicators internally.
+
+### Why?
+
+- **Consistency** — All strategies use the same indicator implementations, ensuring identical calculations across the system.
+- **Reusability** — Indicators are maintained in one place. Bug fixes and optimizations benefit every strategy automatically.
+- **Testing** — The `indicators` crate has its own comprehensive test suite. You don't need to re-test EMA or RSI math in your strategy tests.
+- **Performance** — Indicator implementations may be optimized (e.g., incremental updates, SIMD) transparently.
+
+### Available Indicator Functions
+
+```rust
+use indicators;
+
+// Exponential Moving Average
+indicators::ema(period: usize, prices: &[Decimal]) -> Result<Vec<IndicatorValue>, String>
+
+// Relative Strength Index
+indicators::rsi(period: usize, prices: &[Decimal]) -> Result<Vec<IndicatorValue>, String>
+
+// Bollinger Bands
+indicators::bollinger(period: usize, std_dev: Decimal, prices: &[Decimal]) -> Result<Vec<BollingerBands>, String>
+
+// MACD
+indicators::macd(fast: usize, slow: usize, signal: usize, prices: &[Decimal]) -> Result<Vec<MacdValue>, String>
+
+// Average True Range
+indicators::atr(period: usize, highs: &[Decimal], lows: &[Decimal], closes: &[Decimal]) -> Result<Vec<IndicatorValue>, String>
+
+// Volume-Weighted Average Price
+indicators::vwap(prices: &[Decimal], volumes: &[Decimal]) -> Result<Vec<IndicatorValue>, String>
+```
+
+### Usage in a Strategy
+
+```rust
+impl Strategy for MyStrategy {
+    fn on_bar(&mut self, ctx: &StrategyContext) -> Vec<Signal> {
+        if ctx.current_idx < self.period {
+            return vec![];
+        }
+
+        let closes: Vec<Decimal> = ctx.historical_bars[..=ctx.current_idx]
+            .iter().map(|b| b.close).collect();
+
+        let rsi_values = match indicators::rsi(self.period, &closes) {
+            Ok(v) => v,
+            Err(_) => return vec![],
+        };
+
+        let current_rsi = rsi_values.last().unwrap().value;
+        // ... signal logic based on RSI ...
+        vec![]
+    }
+}
+```
+
+---
+
+## 7. Strategy Configuration Interface
+
+Each strategy must expose its configurable parameters through the configuration interface. This enables the REST API to discover strategy metadata and allows users to customize parameters at runtime.
+
+### Types
+
+```rust
+// strategy/src/config.rs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ParamType {
+    Integer { min: i64, max: i64, default: i64 },
+    Decimal { min: String, max: String, default: String },
+    String { default: String, options: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParamDefinition {
+    pub name: String,
+    pub description: String,
+    pub param_type: ParamType,
+}
+
+pub struct StrategyInfo {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub default_params: serde_json::Value,
+    pub param_definitions: Vec<ParamDefinition>,
+    pub create: fn(String, Decimal, serde_json::Value) -> Result<Box<dyn Strategy>, String>,
+}
+```
+
+### Adding Configurable Parameters to a Strategy
+
+```rust
+use crate::base::*;
+use rust_decimal::Decimal;
+use serde::{Serialize, Deserialize};
+
+pub struct MovingAverageCrossover {
+    pub symbol: String,
+    pub quantity: Decimal,
+    pub fast_period: usize,
+    pub slow_period: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MovingAverageCrossoverParams {
+    pub fast_period: i64,
+    pub slow_period: i64,
+}
+
+impl MovingAverageCrossover {
+    pub fn new(symbol: String, quantity: Decimal, params: serde_json::Value) -> Result<Self, String> {
+        let p: MovingAverageCrossoverParams = serde_json::from_value(params)
+            .map_err(|e| format!("Invalid params: {}", e))?;
+        
+        if p.fast_period >= p.slow_period {
+            return Err("fast_period must be less than slow_period".to_string());
+        }
+        
+        Ok(Self {
+            symbol,
+            quantity,
+            fast_period: p.fast_period as usize,
+            slow_period: p.slow_period as usize,
+        })
+    }
+}
+
+impl Strategy for MovingAverageCrossover {
+    fn on_bar(&mut self, ctx: &StrategyContext) -> Vec<Signal> {
+        if ctx.current_idx < self.slow_period + 1 {
+            return vec![];
+        }
+
+        let closes: Vec<Decimal> = ctx.historical_bars[..=ctx.current_idx]
+            .iter().map(|b| b.close).collect();
+
+        let fast_results = match indicators::ema(self.fast_period, &closes) {
+            Ok(v) => v,
+            Err(_) => return vec![],
+        };
+        let slow_results = match indicators::ema(self.slow_period, &closes) {
+            Ok(v) => v,
+            Err(_) => return vec![],
+        };
+
+        let fast_ema = fast_results.last().unwrap().value;
+        let slow_ema = slow_results.last().unwrap().value;
+        let prev_fast = fast_results[fast_results.len() - 2].value;
+        let prev_slow = slow_results[slow_results.len() - 2].value;
+
+        if prev_fast <= prev_slow && fast_ema > slow_ema {
+            vec![Signal {
+                action: SignalAction::OpenLong,
+                symbol: self.symbol.clone(),
+                quantity: Some(self.quantity),
+                strength: 1.0,
+                reason: "MA crossover bullish".to_string(),
+                stop_loss: None,
+                take_profit: None,
+            }]
+        } else if prev_fast >= prev_slow && fast_ema < slow_ema {
+            vec![Signal {
+                action: SignalAction::CloseLong,
+                symbol: self.symbol.clone(),
+                quantity: Some(self.quantity),
+                strength: 1.0,
+                reason: "MA crossover bearish".to_string(),
+                stop_loss: None,
+                take_profit: None,
+            }]
+        } else {
+            vec![]
+        }
+    }
+}
+```
+
+### Registering in `available_strategies()`
+
+```rust
+// rust_core/crates/strategy/src/config.rs
+pub fn available_strategies() -> Vec<StrategyInfo> {
+    vec![
+        StrategyInfo {
+            id: "always_long",
+            name: "Always Long",
+            description: "Opens a long position on the first bar and holds.",
+            default_params: serde_json::json!({}),
+            param_definitions: vec![],
+            create: |symbol, quantity, _params| {
+                Ok(Box::new(AlwaysLong::new(symbol, quantity)))
+            },
+        },
+        StrategyInfo {
+            id: "moving_average_crossover",
+            name: "Moving Average Crossover",
+            description: "Generates signals based on EMA crossovers.",
+            default_params: serde_json::json!({
+                "fast_period": 9,
+                "slow_period": 21
+            }),
+            param_definitions: vec![
+                ParamDefinition {
+                    name: "fast_period".to_string(),
+                    description: "Fast EMA period".to_string(),
+                    param_type: ParamType::Integer {
+                        min: 2,
+                        max: 100,
+                        default: 9,
+                    },
+                },
+                ParamDefinition {
+                    name: "slow_period".to_string(),
+                    description: "Slow EMA period".to_string(),
+                    param_type: ParamType::Integer {
+                        min: 5,
+                        max: 200,
+                        default: 21,
+                    },
+                },
+            ],
+            create: |symbol, quantity, params| {
+                MovingAverageCrossover::new(symbol, quantity, params)
+                    .map(|s| Box::new(s) as Box<dyn Strategy>)
+            },
+        },
+    ]
+}
+```
+
+---
+
+## 8. Code Examples
 
 ### Example 1 — Simple Strategy (AlwaysLong)
 
@@ -265,7 +501,7 @@ impl Strategy for AlwaysLong {
 
 ### Example 2 — Indicator-Based Strategy (EMA Crossover)
 
-A strategy that computes fast and slow EMAs and generates signals on crossovers.
+A strategy that computes fast and slow EMAs using the `indicators` crate and generates signals on crossovers.
 
 ```rust
 // rust_core/crates/strategy/src/ema_crossover.rs
@@ -279,36 +515,28 @@ pub struct EmaCrossover {
     pub slow_period: usize,
 }
 
-impl EmaCrossover {
-    fn ema(values: &[Decimal], period: usize) -> Option<Decimal> {
-        if values.len() < period {
-            return None;
-        }
-        let slice = &values[values.len() - period..];
-        let multiplier = Decimal::from(2) / Decimal::from(period + 1);
-        let mut ema = slice[0];
-        for val in &slice[1..] {
-            ema = (*val - ema) * multiplier + ema;
-        }
-        Some(ema)
-    }
-}
-
 impl Strategy for EmaCrossover {
     fn on_bar(&mut self, ctx: &StrategyContext) -> Vec<Signal> {
-        // Guard: need at least slow_period + 1 bars
         if ctx.current_idx < self.slow_period + 1 {
             return vec![];
         }
-
-        let available = &ctx.historical_bars[..=ctx.current_idx];
-        let closes: Vec<Decimal> = available.iter().map(|b| b.close).collect();
-
-        let fast_ema = Self::ema(&closes, self.fast_period)?;
-        let slow_ema = Self::ema(&closes, self.slow_period)?;
-        let prev_fast = Self::ema(&closes[..closes.len() - 1], self.fast_period)?;
-        let prev_slow = Self::ema(&closes[..closes.len() - 1], self.slow_period)?;
-
+        let closes: Vec<Decimal> = ctx.historical_bars[..=ctx.current_idx]
+            .iter().map(|b| b.close).collect();
+        
+        let fast_results = match indicators::ema(self.fast_period, &closes) {
+            Ok(v) => v,
+            Err(_) => return vec![],
+        };
+        let slow_results = match indicators::ema(self.slow_period, &closes) {
+            Ok(v) => v,
+            Err(_) => return vec![],
+        };
+        
+        let fast_ema = fast_results.last().unwrap().value;
+        let slow_ema = slow_results.last().unwrap().value;
+        let prev_fast = fast_results[fast_results.len() - 2].value;
+        let prev_slow = slow_results[slow_results.len() - 2].value;
+        
         if prev_fast <= prev_slow && fast_ema > slow_ema {
             vec![Signal {
                 action: SignalAction::OpenLong,
@@ -451,7 +679,7 @@ impl Strategy for BalanceAware {
 
 ---
 
-## 7. Best Practices
+## 9. Best Practices
 
 1. **Guard for minimum data**  
    Always check `ctx.current_idx` before accessing history. If your strategy needs a 50-period lookback, return `vec![]` until `current_idx >= 50`.
@@ -477,60 +705,258 @@ impl Strategy for BalanceAware {
 7. **Keep state minimal**  
    Strategies are recreated on every backtest request. If you need persistence, implement `save_state`/`load_state`, but prefer pure, deterministic logic derived from `StrategyContext`.
 
+8. **Always use the `indicators` crate**  
+   Never compute EMA, RSI, Bollinger Bands, MACD, ATR, or VWAP manually. Import from `indicators` for consistency, correctness, and maintainability.
+
+9. **Expose configurable parameters**  
+   Define `ParamDefinition`s for every tunable value in your strategy. This makes your strategy usable via the REST API and allows parameter optimization without code changes.
+
+10. **Validate parameters in the factory function**  
+    The `create` function should validate `strategy_params` and return a descriptive `Err(String)` on invalid input. The API will forward this message to the client.
+
 ---
 
-## 8. Registration
+## 10. Registration
 
-CBT-Pro uses **pure-code registration**. There are no configuration files, YAML manifests, or dynamic libraries. To make your strategy available to the REST API, edit the match statement in `rust_core/crates/api/src/server.rs`.
+CBT-Pro uses a **strategy registry** in `rust_core/crates/strategy/src/config.rs`. The API queries this registry dynamically, so no API code changes are required when adding a new strategy.
 
-### 1. Import your strategy
+### How it works
 
-```rust
-use strategy::{AlwaysLong, EmaCrossover, MyStrategy};
-```
+1. Create your strategy struct and implement the `Strategy` trait.
+2. Define a factory function that accepts `(String, Decimal, serde_json::Value)` and returns `Result<Box<dyn Strategy>, String>`.
+3. Add a `StrategyInfo` entry to `available_strategies()`.
 
-### 2. Add a match arm in `start_backtest`
+The API will automatically:
+- List your strategy in `GET /api/v1/strategies`
+- Return its default parameters in `GET /api/v1/strategies/:id/defaults`
+- Instantiate it via the factory when `POST /api/v1/backtest/start` is called with your strategy ID
 
-Locate the block that looks like this:
-
-```rust
-let strategy: Option<Box<dyn strategy::Strategy>> = match strategy_id {
-    "always_long" => Some(Box::new(strategy::AlwaysLong::new(
-        config.symbol.clone(),
-        Decimal::from_str("0.1").unwrap(),
-    ))),
-    "ema_crossover" => Some(Box::new(strategy::EmaCrossover {
-        symbol: config.symbol.clone(),
-        quantity: Decimal::from_str("0.1").unwrap(),
-        fast_period: 9,
-        slow_period: 21,
-    })),
-    _ => None,
-};
-```
-
-Append your variant:
+### Example: Registering a Strategy
 
 ```rust
-    "my_strategy" => Some(Box::new(strategy::MyStrategy {
-        symbol: config.symbol.clone(),
-        quantity: Decimal::from_str("0.1").unwrap(),
-        lookback: 20,
-    })),
+// rust_core/crates/strategy/src/config.rs
+
+use serde_json;
+
+pub fn available_strategies() -> Vec<StrategyInfo> {
+    vec![
+        // ... existing strategies ...
+        
+        StrategyInfo {
+            id: "my_strategy",
+            name: "My Strategy",
+            description: "A custom strategy with configurable lookback.",
+            default_params: serde_json::json!({
+                "lookback": 20
+            }),
+            param_definitions: vec![
+                ParamDefinition {
+                    name: "lookback".to_string(),
+                    description: "Number of bars to look back".to_string(),
+                    param_type: ParamType::Integer {
+                        min: 5,
+                        max: 200,
+                        default: 20,
+                    },
+                },
+            ],
+            create: |symbol, quantity, params| {
+                let lookback = params.get("lookback")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(20) as usize;
+                
+                Ok(Box::new(MyStrategy {
+                    symbol,
+                    quantity,
+                    lookback,
+                }))
+            },
+        },
+    ]
+}
 ```
 
-### 3. Rebuild
+### Parameter passing flow
+
+When a client sends a backtest request:
+
+```json
+{
+  "strategy_id": "my_strategy",
+  "strategy_params": {
+    "lookback": 30
+  }
+}
+```
+
+The API:
+1. Looks up `"my_strategy"` in the registry returned by `available_strategies()`
+2. Merges client-provided `strategy_params` with `default_params`
+3. Calls the `create` factory with `(symbol, quantity, merged_params)`
+4. The factory validates parameters and returns `Box<dyn Strategy>`
+
+If `strategy_params` is omitted, the API uses `default_params` as-is.
+
+### Rebuild
 
 ```bash
 cd rust_core
 cargo build --release
 ```
 
-Clients can now start a backtest with `"strategy_id": "my_strategy"`.
+Clients can now start a backtest with `"strategy_id": "my_strategy"` and optionally override parameters via `strategy_params`.
 
 ---
 
-## 9. Testing Your Strategy
+## 11. API Integration
+
+### Endpoints
+
+#### `GET /api/v1/strategies`
+
+List all available strategies with their metadata.
+
+**Response:**
+
+```json
+{
+  "strategies": [
+    {
+      "id": "always_long",
+      "name": "Always Long",
+      "description": "Opens a long position on the first bar and holds."
+    },
+    {
+      "id": "moving_average_crossover",
+      "name": "Moving Average Crossover",
+      "description": "Generates signals based on EMA crossovers."
+    }
+  ]
+}
+```
+
+#### `GET /api/v1/strategies/:id/defaults`
+
+Get default parameters and parameter definitions for a specific strategy.
+
+**Request:**
+
+```bash
+curl http://localhost:8080/api/v1/strategies/moving_average_crossover/defaults
+```
+
+**Response:**
+
+```json
+{
+  "id": "moving_average_crossover",
+  "name": "Moving Average Crossover",
+  "description": "Generates signals based on EMA crossovers.",
+  "default_params": {
+    "fast_period": 9,
+    "slow_period": 21
+  },
+  "param_definitions": [
+    {
+      "name": "fast_period",
+      "description": "Fast EMA period",
+      "param_type": {
+        "Integer": {
+          "min": 2,
+          "max": 100,
+          "default": 9
+        }
+      }
+    },
+    {
+      "name": "slow_period",
+      "description": "Slow EMA period",
+      "param_type": {
+        "Integer": {
+          "min": 5,
+          "max": 200,
+          "default": 21
+        }
+      }
+    }
+  ]
+}
+```
+
+#### `POST /api/v1/backtest/start`
+
+Start a new backtest. Now accepts an optional `strategy_params` field to customize strategy parameters.
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:8080/api/v1/backtest/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "strategy_id": "moving_average_crossover",
+    "strategy_params": {
+      "fast_period": 12,
+      "slow_period": 26
+    },
+    "symbol": "BTC-USDT",
+    "timeframe": "1h",
+    "start_time": "2024-01-01T00:00:00Z",
+    "end_time": "2024-06-01T00:00:00Z",
+    "initial_balance": "100000",
+    "quantity": "0.1"
+  }'
+```
+
+**Key fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `strategy_id` | string | yes | Strategy identifier from `GET /api/v1/strategies` |
+| `strategy_params` | object | no | Parameter overrides. Must match the strategy's `ParamDefinition`s. |
+| `symbol` | string | yes | Trading pair (e.g. `"BTC-USDT"`) |
+| `timeframe` | string | yes | Bar timeframe (e.g. `"1h"`, `"4h"`, `"1d"`) |
+| `start_time` | string | yes | ISO 8601 start timestamp |
+| `end_time` | string | yes | ISO 8601 end timestamp |
+| `initial_balance` | string | yes | Starting account balance |
+| `quantity` | string | yes | Default order quantity |
+
+**Response:**
+
+```json
+{
+  "backtest_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "running",
+  "strategy_id": "moving_average_crossover",
+  "strategy_params": {
+    "fast_period": 12,
+    "slow_period": 26
+  }
+}
+```
+
+### Error Responses
+
+If parameters are invalid, the API returns a `400 Bad Request`:
+
+```json
+{
+  "error": "Invalid strategy parameters",
+  "details": "fast_period must be less than slow_period"
+}
+```
+
+If the strategy ID is unknown:
+
+```json
+{
+  "error": "Unknown strategy",
+  "details": "Strategy 'unknown_strategy' not found in registry"
+}
+```
+
+---
+
+## 12. Testing Your Strategy
 
 ### Unit tests inside the strategy crate
 
@@ -636,6 +1062,7 @@ fn test_my_strategy_backtest() {
 - **Edge cases** — Test with fewer bars than your lookback period to verify graceful no-ops.
 - **Position overlap** — Verify that your strategy does not emit `OpenLong` when a long is already open, unless that is intentional (e.g. pyramiding).
 - **State round-trip** — If you implement `save_state`/`load_state`, write a test that serialises, deserialises, and asserts identical behaviour.
+- **Parameter validation** — Test your factory function with invalid parameters to ensure it returns clear error messages.
 
 ---
 
@@ -643,9 +1070,13 @@ fn test_my_strategy_backtest() {
 
 - [ ] Create `.rs` file in `rust_core/crates/strategy/src/`
 - [ ] Implement `Strategy` trait (`on_bar`, optional `save_state`/`load_state`)
+- [ ] Use the `indicators` crate for all indicator calculations (EMA, RSI, Bollinger, MACD, ATR, VWAP)
+- [ ] Define configurable parameters with `ParamDefinition`s
+- [ ] Add parameter validation in the factory function
 - [ ] Export module and type from `rust_core/crates/strategy/src/lib.rs`
-- [ ] Register match arm in `rust_core/crates/api/src/server.rs`
+- [ ] Register `StrategyInfo` in `available_strategies()` in `rust_core/crates/strategy/src/config.rs`
 - [ ] Add unit tests with synthetic bars
+- [ ] Test parameter validation and edge cases
 - [ ] Run `cargo test` and `cargo clippy` before committing
 
 Happy strategising!

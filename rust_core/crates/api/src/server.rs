@@ -14,7 +14,6 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use engine::{BacktestEngine, EngineConfig, EngineSnapshot, BacktestResult};
-use strategy::{AlwaysLong, EmaCrossover, RsiMacd, BollingerBands, Breakout};
 use orderbook::{OrderRequest, OrderFill, OrderSide, Direction, OrderType, MarginMode};
 use data_pipeline::{StandardBar, TimeFrame};
 use rust_decimal::Decimal;
@@ -22,6 +21,7 @@ use std::str::FromStr;
 use rand::rngs::SmallRng;
 use rand::SeedableRng;
 use rand::Rng;
+use indicators;
 
 /// Application state shared across handlers.
 pub type AppState = Arc<Mutex<HashMap<String, BacktestEngine>>>;
@@ -62,6 +62,8 @@ pub fn create_rest_router() -> Router<AppState> {
         .route("/api/v1/backtest/:id/result", get(get_backtest_result))
         .route("/api/v1/order", post(submit_order))
         .route("/api/v1/indicators", get(get_indicators))
+        .route("/api/v1/strategies", get(list_strategies))
+        .route("/api/v1/strategies/:id/defaults", get(get_strategy_defaults))
 }
 
 async fn health_check() -> &'static str {
@@ -96,31 +98,14 @@ async fn start_backtest(
 
     // Build strategy
     let strategy_id = payload.get("strategy_id").and_then(|v| v.as_str()).unwrap_or("always_long");
-    let strategy: Option<Box<dyn strategy::Strategy>> = match strategy_id {
-        "always_long" => Some(Box::new(strategy::AlwaysLong::new(
-            config.symbol.clone(),
-            Decimal::from_str("0.1").unwrap(),
-        ))),
-        "ema_crossover" => Some(Box::new(strategy::EmaCrossover {
-            symbol: config.symbol.clone(),
-            quantity: Decimal::from_str("0.1").unwrap(),
-            fast_period: 9,
-            slow_period: 21,
-        })),
-        "rsi_macd" => Some(Box::new(strategy::RsiMacd {
-            symbol: config.symbol.clone(),
-            quantity: Decimal::from_str("0.1").unwrap(),
-        })),
-        "bollinger_bands" => Some(Box::new(strategy::BollingerBands {
-            symbol: config.symbol.clone(),
-            quantity: Decimal::from_str("0.1").unwrap(),
-        })),
-        "breakout" => Some(Box::new(strategy::Breakout {
-            symbol: config.symbol.clone(),
-            quantity: Decimal::from_str("0.1").unwrap(),
-        })),
-        _ => None,
-    };
+    let strategy_params = payload.get("strategy_params").cloned().unwrap_or(serde_json::json!({}));
+    let strategy = strategy::available_strategies()
+        .into_iter()
+        .find(|s| s.id == strategy_id)
+        .and_then(|info| {
+            let quantity = Decimal::from_str("0.1").unwrap();
+            (info.create)(config.symbol.clone(), quantity, strategy_params).ok()
+        });
 
     let engine = BacktestEngine::new(config, bars, strategy);
     state.lock().await.insert(backtest_id.clone(), engine);
@@ -200,7 +185,7 @@ async fn get_backtest_result(
 }
 
 async fn submit_order(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(payload): Json<Value>,
 ) -> Result<Json<OrderFill>, (StatusCode, Json<ErrorResponse>)> {
     // Parse order request
@@ -240,19 +225,156 @@ async fn get_indicators(
     let indicator_names: Vec<&str> = params.indicators.split(',').collect();
     let mut result = serde_json::Map::new();
 
-    // For MVP, return placeholder values
+    // Generate 200 synthetic bars for indicator calculation
+    let timeframe = TimeFrame::from_string(&params.timeframe).unwrap_or(TimeFrame::M1);
+    let bars = generate_synthetic_bars(&params.symbol, 200, timeframe);
+
+    let closes: Vec<Decimal> = bars.iter().map(|b| b.close).collect();
+    let highs: Vec<Decimal> = bars.iter().map(|b| b.high).collect();
+    let lows: Vec<Decimal> = bars.iter().map(|b| b.low).collect();
+    let volumes: Vec<Decimal> = bars.iter().map(|b| b.volume).collect();
+
     for name in indicator_names {
-        let val = match name {
-            "ema_9" => Value::String("42350.50".to_string()),
-            "ema_21" => Value::String("42100.00".to_string()),
-            "rsi_14" => Value::Number(serde_json::Number::from_f64(62.5).unwrap()),
-            "atr_14" => Value::String("850.00".to_string()),
-            _ => Value::Null,
+        let indicator_value = match name {
+            "ema_9" => {
+                match indicators::ema::ema(9, &closes) {
+                    Ok(vals) => vals.last().map(|v| {
+                        serde_json::json!({
+                            "value": v.value.to_string(),
+                            "timestamp": v.timestamp
+                        })
+                    }),
+                    Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: format!("EMA calculation error: {}", e),
+                    }))),
+                }
+            }
+            "ema_21" => {
+                match indicators::ema::ema(21, &closes) {
+                    Ok(vals) => vals.last().map(|v| {
+                        serde_json::json!({
+                            "value": v.value.to_string(),
+                            "timestamp": v.timestamp
+                        })
+                    }),
+                    Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: format!("EMA calculation error: {}", e),
+                    }))),
+                }
+            }
+            "rsi_14" => {
+                match indicators::rsi::rsi(14, &closes) {
+                    Ok(vals) => vals.last().map(|v| {
+                        serde_json::json!({
+                            "value": v.value.to_string(),
+                            "timestamp": v.timestamp
+                        })
+                    }),
+                    Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: format!("RSI calculation error: {}", e),
+                    }))),
+                }
+            }
+            "bollinger_20_2" => {
+                match indicators::bollinger::bollinger(20, Decimal::from(2), &closes) {
+                    Ok(vals) => vals.last().map(|(ir, bb)| {
+                        serde_json::json!({
+                            "upper": bb.upper.to_string(),
+                            "middle": bb.middle.to_string(),
+                            "lower": bb.lower.to_string(),
+                            "timestamp": ir.timestamp
+                        })
+                    }),
+                    Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: format!("Bollinger Bands calculation error: {}", e),
+                    }))),
+                }
+            }
+            "macd_12_26_9" => {
+                match indicators::macd::macd(12, 26, 9, &closes) {
+                    Ok(vals) => vals.last().map(|(ir, mr)| {
+                        serde_json::json!({
+                            "macd": mr.macd.to_string(),
+                            "signal": mr.signal.to_string(),
+                            "histogram": mr.histogram.to_string(),
+                            "timestamp": ir.timestamp
+                        })
+                    }),
+                    Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: format!("MACD calculation error: {}", e),
+                    }))),
+                }
+            }
+            "atr_14" => {
+                match indicators::atr::atr(14, &highs, &lows, &closes) {
+                    Ok(vals) => vals.last().map(|v| {
+                        serde_json::json!({
+                            "value": v.value.to_string(),
+                            "timestamp": v.timestamp
+                        })
+                    }),
+                    Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: format!("ATR calculation error: {}", e),
+                    }))),
+                }
+            }
+            "vwap" => {
+                match indicators::vwap::vwap(&closes, &volumes) {
+                    Ok(vals) => vals.last().map(|v| {
+                        serde_json::json!({
+                            "value": v.value.to_string(),
+                            "timestamp": v.timestamp
+                        })
+                    }),
+                    Err(e) => return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse {
+                        error: format!("VWAP calculation error: {}", e),
+                    }))),
+                }
+            }
+            _ => Some(Value::Null),
         };
-        result.insert(name.to_string(), val);
+
+        result.insert(name.to_string(), indicator_value.unwrap_or(Value::Null));
     }
 
     Ok(Json(Value::Object(result)))
+}
+
+async fn list_strategies() -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
+    let strategies = strategy::available_strategies();
+    let mut result = Vec::new();
+
+    for info in strategies {
+        result.push(serde_json::json!({
+            "id": info.id,
+            "name": info.name,
+            "description": info.description,
+            "default_params": info.default_params,
+        }));
+    }
+
+    Ok(Json(Value::Array(result)))
+}
+
+async fn get_strategy_defaults(
+    Path(id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<ErrorResponse>)> {
+    let strategies = strategy::available_strategies();
+
+    match strategies.into_iter().find(|s| s.id == id) {
+        Some(info) => {
+            Ok(Json(serde_json::json!({
+                "id": info.id,
+                "name": info.name,
+                "description": info.description,
+                "default_params": info.default_params,
+                "param_definitions": info.param_definitions,
+            })))
+        }
+        None => Err((StatusCode::NOT_FOUND, Json(ErrorResponse {
+            error: format!("Strategy {} not found", id),
+        }))),
+    }
 }
 
 fn parse_engine_config(payload: &Value) -> Result<EngineConfig, String> {
@@ -516,5 +638,182 @@ mod tests {
         let bars = generate_synthetic_bars(&config.symbol, count, tf);
         assert!(!bars.is_empty());
         assert_eq!(bars[1].timestamp - bars[0].timestamp, step_ms);
+    }
+
+    // ------------------------------------------------------------------
+    // Indicator API Tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_indicators_returns_real_values() {
+        let query = IndicatorQuery {
+            symbol: "BTC-USDT".to_string(),
+            timeframe: "1m".to_string(),
+            indicators: "ema_9,rsi_14".to_string(),
+        };
+
+        let result = get_indicators(Query(query)).await;
+        assert!(result.is_ok(), "get_indicators should succeed");
+
+        let json = match result {
+            Ok(Json(v)) => v,
+            Err(_) => panic!("Expected Ok result"),
+        };
+        let obj = json.as_object().expect("Response should be a JSON object");
+
+        // Verify both indicators are present
+        assert!(obj.contains_key("ema_9"), "Response should contain ema_9");
+        assert!(obj.contains_key("rsi_14"), "Response should contain rsi_14");
+
+        // Verify values are not null (real calculated values)
+        let ema_value = &obj["ema_9"];
+        assert!(!ema_value.is_null(), "ema_9 should have a real calculated value");
+        assert!(ema_value.get("value").is_some(), "ema_9 should have a value field");
+
+        let rsi_value = &obj["rsi_14"];
+        assert!(!rsi_value.is_null(), "rsi_14 should have a real calculated value");
+        assert!(rsi_value.get("value").is_some(), "rsi_14 should have a value field");
+    }
+
+    // ------------------------------------------------------------------
+    // Strategy API Tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_list_strategies() {
+        let result = list_strategies().await;
+        assert!(result.is_ok(), "list_strategies should succeed");
+
+        let json = match result {
+            Ok(Json(v)) => v,
+            Err(_) => panic!("Expected Ok result"),
+        };
+        let strategies = json.as_array().expect("Response should be a JSON array");
+
+        // Should return all 5 strategies
+        assert_eq!(strategies.len(), 5, "Should return exactly 5 strategies");
+
+        let ids: Vec<&str> = strategies
+            .iter()
+            .map(|s| s.get("id").unwrap().as_str().unwrap())
+            .collect();
+
+        assert!(ids.contains(&"always_long"), "Should include always_long");
+        assert!(ids.contains(&"ema_crossover"), "Should include ema_crossover");
+        assert!(ids.contains(&"rsi_macd"), "Should include rsi_macd");
+        assert!(ids.contains(&"bollinger_bands"), "Should include bollinger_bands");
+        assert!(ids.contains(&"breakout"), "Should include breakout");
+
+        // Verify each strategy has required fields
+        for strategy in strategies {
+            assert!(strategy.get("id").is_some(), "Strategy should have id");
+            assert!(strategy.get("name").is_some(), "Strategy should have name");
+            assert!(strategy.get("description").is_some(), "Strategy should have description");
+            assert!(strategy.get("default_params").is_some(), "Strategy should have default_params");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_strategy_defaults_ema_crossover() {
+        let result = get_strategy_defaults(Path("ema_crossover".to_string())).await;
+        assert!(result.is_ok(), "get_strategy_defaults should succeed for ema_crossover");
+
+        let json = match result {
+            Ok(Json(v)) => v,
+            Err(_) => panic!("Expected Ok result"),
+        };
+        assert_eq!(json.get("id").unwrap().as_str().unwrap(), "ema_crossover");
+        assert_eq!(json.get("name").unwrap().as_str().unwrap(), "EMA Crossover");
+
+        let param_defs = json.get("param_definitions").unwrap().as_array().unwrap();
+        assert_eq!(param_defs.len(), 2, "EMA Crossover should have 2 param definitions");
+
+        // Verify fast_period definition
+        let fast_period = &param_defs[0];
+        assert_eq!(fast_period.get("name").unwrap().as_str().unwrap(), "fast_period");
+        let fast_type = fast_period.get("param_type").unwrap();
+        assert_eq!(fast_type.get("Integer").unwrap().get("min").unwrap().as_i64().unwrap(), 2);
+        assert_eq!(fast_type.get("Integer").unwrap().get("max").unwrap().as_i64().unwrap(), 100);
+        assert_eq!(fast_type.get("Integer").unwrap().get("default").unwrap().as_i64().unwrap(), 9);
+
+        // Verify slow_period definition
+        let slow_period = &param_defs[1];
+        assert_eq!(slow_period.get("name").unwrap().as_str().unwrap(), "slow_period");
+        let slow_type = slow_period.get("param_type").unwrap();
+        assert_eq!(slow_type.get("Integer").unwrap().get("min").unwrap().as_i64().unwrap(), 2);
+        assert_eq!(slow_type.get("Integer").unwrap().get("max").unwrap().as_i64().unwrap(), 200);
+        assert_eq!(slow_type.get("Integer").unwrap().get("default").unwrap().as_i64().unwrap(), 21);
+    }
+
+    // ------------------------------------------------------------------
+    // Backtest API Tests
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_start_backtest_with_custom_params() {
+        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let payload = serde_json::json!({
+            "config": {
+                "symbol": "BTC-USDT",
+                "initial_balance": "100000",
+                "margin_mode": "Cross",
+                "default_leverage": "10"
+            },
+            "strategy_id": "ema_crossover",
+            "strategy_params": {
+                "fast_period": 5,
+                "slow_period": 15
+            },
+            "timeframe": "1m",
+            "start_time": 1704067200000i64,
+            "end_time": 1704153600000i64
+        });
+
+        let result = start_backtest(State(state.clone()), Json(payload)).await;
+        assert!(result.is_ok(), "start_backtest with custom params should succeed");
+
+        let response = match result {
+            Ok(Json(v)) => v,
+            Err(_) => panic!("Expected Ok result"),
+        };
+        assert_eq!(response.status, "running");
+        assert!(!response.backtest_id.is_empty(), "backtest_id should not be empty");
+        assert!(response.total_bars > 0, "total_bars should be positive");
+
+        // Verify engine was stored in state
+        let engines = state.lock().await;
+        assert!(engines.contains_key(&response.backtest_id), "Engine should be stored in state");
+    }
+
+    #[tokio::test]
+    async fn test_start_backtest_with_invalid_strategy() {
+        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let payload = serde_json::json!({
+            "config": {
+                "symbol": "BTC-USDT",
+                "initial_balance": "100000",
+                "margin_mode": "Cross",
+                "default_leverage": "10"
+            },
+            "strategy_id": "nonexistent_strategy",
+            "timeframe": "1m",
+            "start_time": 1704067200000i64,
+            "end_time": 1704153600000i64
+        });
+
+        let result = start_backtest(State(state.clone()), Json(payload)).await;
+        // Even with invalid strategy, start_backtest currently creates an engine without strategy
+        // and returns success. Verify that engine is created but with None strategy.
+        assert!(result.is_ok(), "start_backtest should still succeed (engine created without strategy)");
+
+        let response = match result {
+            Ok(Json(v)) => v,
+            Err(_) => panic!("Expected Ok result"),
+        };
+        assert_eq!(response.status, "running");
+
+        // Verify engine was stored
+        let engines = state.lock().await;
+        assert!(engines.contains_key(&response.backtest_id));
     }
 }
