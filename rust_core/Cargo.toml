@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = ["crates/engine", "crates/orderbook", "crates/indicators", "crates/data_pipeline", "crates/api"]
+members = ["crates/engine", "crates/orderbook", "crates/indicators", "crates/data_pipeline", "crates/api", "crates/strategy"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -35,6 +35,7 @@ tracing-subscriber.workspace = true
 data_pipeline = { path = "crates/data_pipeline" }
 engine = { path = "crates/engine" }
 orderbook = { path = "crates/orderbook" }
+strategy = { path = "crates/strategy" }
 rust_decimal = { workspace = true }
 
 [[bin]]

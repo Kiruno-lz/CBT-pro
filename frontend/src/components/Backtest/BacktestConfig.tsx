@@ -1,7 +1,7 @@
-import { useState, type RefObject } from 'react';
+import { useState, useEffect, type RefObject } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { EngineWebSocket } from '../../stores/websocket';
-import type { TimeFrame } from '../../types';
+import type { TimeFrame, StrategyDefaults, IndicatorConfig, ParamDefinition } from '../../types';
 
 interface BacktestConfigForm {
   symbol: string;
@@ -13,11 +13,34 @@ interface BacktestConfigForm {
   strategy: string;
 }
 
+function getDefaultDates() {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const sixMonthsAgo = new Date(yesterday);
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+  const formatDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  return {
+    startDate: formatDate(sixMonthsAgo),
+    endDate: formatDate(yesterday),
+  };
+}
+
+const defaultDates = getDefaultDates();
+
 const DEFAULT_FORM: BacktestConfigForm = {
   symbol: 'BTCUSDT',
   timeframe: 'H1',
-  startDate: '2024-01-01',
-  endDate: '2024-12-31',
+  startDate: defaultDates.startDate,
+  endDate: defaultDates.endDate,
   initialBalance: '10000',
   leverage: '10',
   strategy: 'ema_cross',
@@ -44,6 +67,32 @@ const STRATEGY_ID_MAP: Record<string, string> = {
   breakout: 'breakout',
 };
 
+const STRATEGY_TO_INDICATORS: Record<string, IndicatorConfig[]> = {
+  ema_crossover: [
+    { name: 'ema_9', params: { period: 9 }, visible: true, panel: 'main' as const },
+    { name: 'ema_21', params: { period: 21 }, visible: true, panel: 'main' as const },
+  ],
+  rsi_macd: [
+    { name: 'rsi_14', params: { period: 14 }, visible: true, panel: 'sub' as const },
+    { name: 'macd_12_26_9', params: { fast: 12, slow: 26, signal: 9 }, visible: true, panel: 'sub' as const },
+  ],
+  bollinger_bands: [
+    { name: 'bollinger_20_2', params: { period: 20, stdDev: 2 }, visible: true, panel: 'main' as const },
+  ],
+  breakout: [],
+  always_long: [],
+};
+
+const ALL_INDICATORS: IndicatorConfig[] = [
+  { name: 'ema_9', params: { period: 9 }, visible: false, panel: 'main' },
+  { name: 'ema_21', params: { period: 21 }, visible: false, panel: 'main' },
+  { name: 'rsi_14', params: { period: 14 }, visible: false, panel: 'sub' },
+  { name: 'macd_12_26_9', params: { fast: 12, slow: 26, signal: 9 }, visible: false, panel: 'sub' },
+  { name: 'bollinger_20_2', params: { period: 20, stdDev: 2 }, visible: false, panel: 'main' },
+  { name: 'atr_14', params: { period: 14 }, visible: false, panel: 'sub' },
+  { name: 'vwap', params: {}, visible: false, panel: 'main' },
+];
+
 function dateToTimestamp(dateStr: string): number {
   return new Date(dateStr).getTime();
 }
@@ -54,6 +103,91 @@ function formatSymbol(symbol: string): string {
   return `${base}-USDT`;
 }
 
+function getParamType(def: ParamDefinition): string {
+  if (def.param_type.Integer) return 'Integer';
+  if (def.param_type.Decimal) return 'Decimal';
+  if (def.param_type.String) return 'String';
+  return 'Unknown';
+}
+
+function generateIndicatorsFromParams(
+  strategyId: string,
+  params: Record<string, string | number>
+): IndicatorConfig[] {
+  // Start with all default indicators (all hidden by default)
+  const indicators = ALL_INDICATORS.map((ind) => ({ ...ind }));
+
+  // Generate active indicators based on CURRENT parameters
+  const activeIndicators: IndicatorConfig[] = [];
+
+  if (strategyId === 'ema_crossover') {
+    for (const [key, value] of Object.entries(params)) {
+      if (key.includes('period') && typeof value === 'number') {
+        activeIndicators.push({
+          name: `ema_${value}`,
+          params: { period: value },
+          visible: true,
+          panel: 'main',
+        });
+      }
+    }
+  }
+
+  if (strategyId === 'rsi_macd') {
+    for (const [key, value] of Object.entries(params)) {
+      if (key.includes('rsi') && key.includes('period') && typeof value === 'number') {
+        activeIndicators.push({
+          name: `rsi_${value}`,
+          params: { period: value },
+          visible: true,
+          panel: 'sub',
+        });
+      }
+    }
+
+    const fast = params.macd_fast ?? params.fast;
+    const slow = params.macd_slow ?? params.slow;
+    const signal = params.macd_signal ?? params.signal;
+    if (typeof fast === 'number' && typeof slow === 'number' && typeof signal === 'number') {
+      activeIndicators.push({
+        name: `macd_${fast}_${slow}_${signal}`,
+        params: { fast, slow, signal },
+        visible: true,
+        panel: 'sub',
+      });
+    }
+  }
+
+  if (strategyId === 'bollinger_bands') {
+    const period = Number(params.period ?? params.bollinger_period);
+    const stdDev = Number(params.std_dev ?? params.stdDev ?? params.bollinger_std_dev);
+    console.log('generateIndicatorsFromParams bollinger - period:', period, 'stdDev:', stdDev, 'types:', typeof period, typeof stdDev);
+    if (!isNaN(period) && !isNaN(stdDev)) {
+      activeIndicators.push({
+        name: `bollinger_${period}_${stdDev}`,
+        params: { period, stdDev },
+        visible: true,
+        panel: 'main',
+      });
+      console.log('Added active indicator:', `bollinger_${period}_${stdDev}`);
+    } else {
+      console.log('Failed to add bollinger indicator - invalid number');
+    }
+  }
+
+  // Apply active indicators - activate matching ones, keep others inactive
+  for (const active of activeIndicators) {
+    const existing = indicators.find((ind) => ind.name === active.name);
+    if (existing) {
+      existing.visible = true;
+    } else {
+      indicators.push(active);
+    }
+  }
+
+  return indicators;
+}
+
 const API_BASE = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_BASE || '');
 
 interface BacktestConfigProps {
@@ -61,15 +195,87 @@ interface BacktestConfigProps {
 }
 
 export function BacktestConfig({ wsRef }: BacktestConfigProps) {
-  const { setPlayback, setWsConnected } = useAppStore();
+  const { setPlayback, setWsConnected, setIndicators, setBacktestId, setCurrentStrategy } = useAppStore();
   const [form, setForm] = useState<BacktestConfigForm>(DEFAULT_FORM);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [strategyDefaults, setStrategyDefaults] = useState<StrategyDefaults | null>(null);
+  const [strategyParams, setStrategyParams] = useState<Record<string, string | number>>({});
+  const [paramsExpanded, setParamsExpanded] = useState(false);
+
+  useEffect(() => {
+    const strategyId = STRATEGY_ID_MAP[form.strategy];
+    if (!strategyId) return;
+
+    setStrategyDefaults(null);
+    setStrategyParams({});
+    setParamsExpanded(false);
+
+    fetch(`${API_BASE}/api/strategies/${strategyId}/defaults`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: StrategyDefaults) => {
+        setStrategyDefaults(data);
+        const defaults: Record<string, string | number> = {};
+        for (const [key, value] of Object.entries(data.default_params)) {
+          defaults[key] = value as string | number;
+        }
+        setStrategyParams(defaults);
+        setCurrentStrategy(data);
+        
+        // Generate indicators from default params
+        console.log('Initial load - defaults:', defaults);
+        const defaultIndicators = generateIndicatorsFromParams(strategyId, defaults);
+        console.log('Initial load - defaultIndicators:', defaultIndicators.map(i => ({ name: i.name, visible: i.visible })));
+        setIndicators(defaultIndicators);
+      })
+      .catch(() => {
+        setStrategyDefaults(null);
+        setStrategyParams({});
+        setIndicators(ALL_INDICATORS.map(ind => ({ ...ind })));
+      });
+  }, [form.strategy, setIndicators, setCurrentStrategy]);
 
   const handleChange = (field: keyof BacktestConfigForm, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
     setError(null);
   };
+
+  const handleParamChange = (name: string, value: string | number) => {
+    console.log('handleParamChange:', name, value);
+    setStrategyParams((prev) => {
+      const updated = { ...prev, [name]: value };
+      console.log('strategyParams updated:', updated);
+      return updated;
+    });
+  };
+
+  useEffect(() => {
+    if (!strategyDefaults || Object.keys(strategyParams).length === 0) return;
+
+    const strategyId = STRATEGY_ID_MAP[form.strategy];
+    if (!strategyId) return;
+
+    console.log('generateIndicatorsFromParams called with:', strategyId, strategyParams);
+    const newIndicators = generateIndicatorsFromParams(strategyId, strategyParams);
+    console.log('newIndicators:', newIndicators.map(i => ({ name: i.name, visible: i.visible })));
+    const currentIndicators = useAppStore.getState().indicators;
+
+    // Only update if the arrays are actually different
+    const currentNames = currentIndicators.map(i => i.name).join(',');
+    const newNames = newIndicators.map(i => i.name).join(',');
+    console.log('currentNames:', currentNames);
+    console.log('newNames:', newNames);
+
+    if (currentNames !== newNames) {
+      console.log('Updating indicators');
+      setIndicators(newIndicators);
+    } else {
+      console.log('Indicators unchanged, skipping update');
+    }
+  }, [strategyParams, strategyDefaults, form.strategy, setIndicators]);
 
   const handleStart = async () => {
     setLoading(true);
@@ -87,6 +293,7 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
             default_leverage: form.leverage,
           },
           strategy_id: STRATEGY_ID_MAP[form.strategy] || form.strategy,
+          strategy_params: strategyParams,
           timeframe: TIMEFAME_MAP[form.timeframe] || form.timeframe,
           start_time: dateToTimestamp(form.startDate),
           end_time: dateToTimestamp(form.endDate),
@@ -108,12 +315,18 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
       });
 
       setWsConnected(true);
+      setBacktestId(data.backtest_id);
+      if (strategyDefaults) {
+        setCurrentStrategy({ ...strategyDefaults, default_params: strategyParams });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start backtest');
     } finally {
       setLoading(false);
     }
   };
+
+  const hasParamDefinitions = strategyDefaults && strategyDefaults.param_definitions.length > 0;
 
   return (
     <div className="panel flex-shrink-0">
@@ -214,6 +427,74 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
             <option value="breakout">Breakout</option>
           </select>
         </div>
+
+        {hasParamDefinitions && (
+          <div className="border border-surface-raised rounded overflow-hidden">
+            <button
+              onClick={() => setParamsExpanded((prev) => !prev)}
+              className="w-full flex items-center justify-between px-3 py-2 bg-surface-raised hover:bg-surface-elevated transition-colors"
+            >
+              <span className="text-xs font-medium">Strategy Parameters</span>
+              <svg
+                className={`w-4 h-4 transition-transform ${paramsExpanded ? 'rotate-180' : ''}`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {paramsExpanded && (
+              <div className="p-3 space-y-3">
+                {strategyDefaults.param_definitions.map((def) => {
+                  const paramType = getParamType(def);
+                  const value = strategyParams[def.name];
+
+                  return (
+                    <div key={def.name} className="space-y-1">
+                      <label className="text-xs text-text-secondary">{def.name}</label>
+                      {paramType === 'Integer' && def.param_type.Integer && (
+                        <input
+                          type="number"
+                          min={def.param_type.Integer.min}
+                          max={def.param_type.Integer.max}
+                          value={value ?? def.param_type.Integer.default}
+                          onChange={(e) => handleParamChange(def.name, parseInt(e.target.value, 10))}
+                          className="input-field font-mono text-xs"
+                        />
+                      )}
+                      {paramType === 'Decimal' && def.param_type.Decimal && (
+                        <input
+                          type="number"
+                          step="0.1"
+                          min={parseFloat(def.param_type.Decimal.min)}
+                          max={parseFloat(def.param_type.Decimal.max)}
+                          value={value ?? def.param_type.Decimal.default}
+                          onChange={(e) => handleParamChange(def.name, parseFloat(e.target.value))}
+                          className="input-field font-mono text-xs"
+                        />
+                      )}
+                      {paramType === 'String' && def.param_type.String && (
+                        <select
+                          value={value ?? def.param_type.String.default}
+                          onChange={(e) => handleParamChange(def.name, e.target.value)}
+                          className="input-field text-xs"
+                        >
+                          {def.param_type.String.options.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
 
         {error && (
           <div className="bg-accent-red/10 border border-accent-red/30 rounded p-2">

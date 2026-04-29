@@ -8,17 +8,7 @@ use crate::EngineConfig;
 use orderbook::{
     InMemoryOrderBook, OrderBookManager, OrderSimulator, MarginCalculator,
 };
-
-/// A trading signal emitted by a strategy.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Signal {
-    pub action: String,
-    pub symbol: String,
-    pub quantity: Decimal,
-    pub strength: f64,
-    pub reason: String,
-    pub timestamp: i64,
-}
+use strategy::{Strategy, Signal, SignalAction, StrategyContext};
 
 /// Snapshot of the backtest engine state at a single bar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +90,7 @@ pub struct BacktestEngine {
     realized_pnl_total: Decimal,
     last_day: i64,
     day_realized_pnl: Decimal,
-    strategy: Option<Box<dyn crate::strategy::Strategy>>,
+    strategy: Option<Box<dyn Strategy>>,
     last_signals: Vec<Signal>,
     last_trades: Vec<OrderFill>,
 }
@@ -110,7 +100,7 @@ impl BacktestEngine {
     pub fn new(
         config: EngineConfig,
         bars: Vec<data_pipeline::StandardBar>,
-        strategy: Option<Box<dyn crate::strategy::Strategy>>,
+        strategy: Option<Box<dyn Strategy>>,
     ) -> Self {
         let balance = config.initial_balance;
         Self {
@@ -158,8 +148,22 @@ impl BacktestEngine {
         let bar_timestamp = bar.timestamp;
 
         // 1.5 Strategy signal generation
-        if let Some(ref strategy) = self.strategy {
-            if let Some(signal) = strategy.on_bar(&self.bars, self.current_idx) {
+        let equity = self.compute_equity();
+        let positions: Vec<Position> = self.order_book.get_all_positions()
+            .into_iter()
+            .cloned()
+            .collect();
+        if let Some(ref mut strategy) = self.strategy {
+            let ctx = StrategyContext {
+                current_bar: &bar,
+                historical_bars: &self.bars[..self.current_idx],
+                current_idx: self.current_idx,
+                positions: &positions,
+                equity,
+                available_balance: self.balance,
+            };
+            let signals = strategy.on_bar(&ctx);
+            for signal in signals {
                 self.last_signals.push(signal.clone());
                 self.submit_signal(signal);
             }
@@ -261,14 +265,19 @@ impl BacktestEngine {
     }
 
     /// Submit a signal to be executed after `execution_delay_bars`.
-    pub fn submit_signal(&mut self, mut signal: Signal) {
-        signal.timestamp = if self.current_idx > 0 {
-            self.bars[self.current_idx - 1].timestamp
-        } else {
-            0
-        };
+    pub fn submit_signal(&mut self, signal: Signal) {
         let execute_at = self.current_idx + self.config.execution_delay_bars as usize;
         self.pending_signals.push_back((execute_at, signal));
+    }
+
+    /// Get all bars in the backtest.
+    pub fn bars(&self) -> &[data_pipeline::StandardBar] {
+        &self.bars
+    }
+
+    /// Get bars processed so far (up to current_idx).
+    pub fn processed_bars(&self) -> &[data_pipeline::StandardBar] {
+        &self.bars[..self.current_idx]
     }
 
     /// Get bars available to strategy (strictly before current_idx).
@@ -300,22 +309,23 @@ impl BacktestEngine {
 
     fn execute_signal(&mut self, signal: &Signal) {
         // Simplified: always market order for now
+        let quantity = signal.quantity.unwrap_or(self.config.default_quantity);
         let req = OrderRequest {
             order_id: uuid::Uuid::new_v4(),
             symbol: signal.symbol.clone(),
-            side: match signal.action.as_str() {
-                "open_long" | "add_long" => OrderSide::Buy,
-                "open_short" | "add_short" => OrderSide::Sell,
-                "close_long" | "reduce_long" => OrderSide::Sell,
-                "close_short" | "reduce_short" => OrderSide::Buy,
-                _ => OrderSide::Buy,
+            side: match signal.action {
+                SignalAction::OpenLong | SignalAction::ReduceLong(_) => OrderSide::Buy,
+                SignalAction::OpenShort | SignalAction::ReduceShort(_) => OrderSide::Sell,
+                SignalAction::CloseLong => OrderSide::Sell,
+                SignalAction::CloseShort => OrderSide::Buy,
+                SignalAction::CloseAll => OrderSide::Buy, // Default
             },
-            direction: match signal.action.as_str() {
-                "open_long" | "add_long" | "reduce_long" | "close_long" => Direction::Long,
+            direction: match signal.action {
+                SignalAction::OpenLong | SignalAction::CloseLong | SignalAction::ReduceLong(_) => Direction::Long,
                 _ => Direction::Short,
             },
             order_type: OrderType::Market,
-            quantity: signal.quantity,
+            quantity,
             margin_mode: self.config.margin_mode,
             leverage: self.config.default_leverage,
             timestamp: if self.current_idx > 0 {
@@ -339,8 +349,8 @@ impl BacktestEngine {
         // Deduct fee from balance immediately
         self.balance -= fill.fee;
 
-        match signal.action.as_str() {
-            "open_long" | "open_short" => {
+        match signal.action {
+            SignalAction::OpenLong | SignalAction::OpenShort => {
                 let im = MarginCalculator::initial_margin(
                     fill.filled_quantity,
                     fill.filled_price,
@@ -351,22 +361,7 @@ impl BacktestEngine {
                     self.record_fill(fill, Some(pos.id), Decimal::ZERO);
                 }
             }
-            "add_long" | "add_short" => {
-                let positions = self.order_book.get_positions_by_symbol(&signal.symbol);
-                if let Some(pos) = positions.first() {
-                    let pos_id = pos.id;
-                    let im = MarginCalculator::initial_margin(
-                        fill.filled_quantity,
-                        fill.filled_price,
-                        self.config.default_leverage,
-                    );
-                    self.margin_used += im;
-                    if let Ok(_pos) = self.order_book.add_to_position(pos_id, &fill) {
-                        self.record_fill(fill, Some(pos_id), Decimal::ZERO);
-                    }
-                }
-            }
-            "reduce_long" | "reduce_short" => {
+            SignalAction::ReduceLong(_) | SignalAction::ReduceShort(_) => {
                 let positions = self.order_book.get_positions_by_symbol(&signal.symbol);
                 if let Some(pos) = positions.first() {
                     let pos_id = pos.id;
@@ -388,7 +383,7 @@ impl BacktestEngine {
                     }
                 }
             }
-            "close_long" | "close_short" => {
+            SignalAction::CloseLong | SignalAction::CloseShort => {
                 let positions = self.order_book.get_positions_by_symbol(&signal.symbol);
                 if let Some(pos) = positions.first() {
                     let pos_id = pos.id;
@@ -405,7 +400,26 @@ impl BacktestEngine {
                     }
                 }
             }
-            _ => {}
+            SignalAction::CloseAll => {
+                let pos_ids: Vec<PositionId> = self.order_book
+                    .get_positions_by_symbol(&signal.symbol)
+                    .iter()
+                    .map(|pos| pos.id)
+                    .collect();
+                for pos_id in pos_ids {
+                    if let Ok((_, realized)) = self.order_book.close_position(
+                        pos_id,
+                        &fill,
+                        self.config.cost_basis_method,
+                    ) {
+                        self.balance += realized;
+                        self.day_realized_pnl += realized;
+                        self.realized_pnl_total += realized;
+                    }
+                }
+                self.margin_used = Decimal::ZERO;
+                self.record_fill(fill, None, Decimal::ZERO);
+            }
         }
     }
 
@@ -654,6 +668,50 @@ mod tests {
     }
 
     #[test]
+    fn test_bars_getter() {
+        let config = EngineConfig {
+            symbol: "BTC-USDT".to_string(),
+            initial_balance: dec!(100000),
+            ..EngineConfig::default()
+        };
+        let bars = generate_test_bars();
+        let engine = BacktestEngine::new(config, bars.clone(), None);
+        let retrieved = engine.bars();
+        assert_eq!(retrieved.len(), bars.len());
+        assert_eq!(retrieved[0].close, bars[0].close);
+        assert_eq!(retrieved.last().unwrap().close, bars.last().unwrap().close);
+    }
+
+    #[test]
+    fn test_processed_bars() {
+        let config = EngineConfig {
+            symbol: "BTC-USDT".to_string(),
+            initial_balance: dec!(100000),
+            ..EngineConfig::default()
+        };
+        let bars = generate_test_bars();
+        let mut engine = BacktestEngine::new(config, bars.clone(), None);
+        
+        // Before stepping, processed_bars should be empty
+        let processed_before = engine.processed_bars();
+        assert_eq!(processed_before.len(), 0, "processed_bars should be empty before stepping");
+        
+        // Step 10 bars
+        for _ in 0..10 {
+            engine.step();
+        }
+        
+        // After stepping, processed_bars should have 10 bars
+        let processed_after = engine.processed_bars();
+        assert_eq!(processed_after.len(), 10, "processed_bars should have 10 bars after stepping 10 times");
+        assert_eq!(processed_after[0].close, bars[0].close);
+        assert_eq!(processed_after[9].close, bars[9].close);
+        
+        // Total bars should still be 100
+        assert_eq!(engine.bars().len(), 100, "bars() should still return all bars");
+    }
+
+    #[test]
     fn test_step_by_step() {
         let config = EngineConfig {
             symbol: "BTC-USDT".to_string(),
@@ -699,12 +757,13 @@ mod tests {
         engine.step(); // idx=2
         engine.step(); // idx=3
         engine.submit_signal(Signal {
-            action: "open_long".to_string(),
+            action: SignalAction::OpenLong,
             symbol: "BTC-USDT".to_string(),
-            quantity: dec!(0.1),
+            quantity: Some(dec!(0.1)),
             strength: 1.0,
             reason: "test".to_string(),
-            timestamp: 0,
+            stop_loss: None,
+            take_profit: None,
         });
         // Signal submitted at idx=3, executes at idx=4
         engine.step(); // idx=4, should execute
@@ -792,12 +851,13 @@ mod tests {
         engine.step();
         engine.step();
         engine.submit_signal(Signal {
-            action: "open_long".to_string(),
+            action: SignalAction::OpenLong,
             symbol: "BTC-USDT".to_string(),
-            quantity: dec!(0.5),
+            quantity: Some(dec!(0.5)),
             strength: 1.0,
             reason: "test".to_string(),
-            timestamp: 0,
+            stop_loss: None,
+            take_profit: None,
         });
         // Need to step until execution
         engine.step(); // executes open_long
@@ -806,12 +866,13 @@ mod tests {
 
         // Close the position
         engine.submit_signal(Signal {
-            action: "close_long".to_string(),
+            action: SignalAction::CloseLong,
             symbol: "BTC-USDT".to_string(),
-            quantity: dec!(0.5),
+            quantity: Some(dec!(0.5)),
             strength: 1.0,
             reason: "test".to_string(),
-            timestamp: 0,
+            stop_loss: None,
+            take_profit: None,
         });
         engine.step(); // executes close
         let snap = engine.get_state();
@@ -821,7 +882,7 @@ mod tests {
 
     #[test]
     fn test_strategy_generates_signals() {
-        use crate::strategy::AlwaysLong;
+        use strategy::AlwaysLong;
         let config = EngineConfig {
             symbol: "BTC-USDT".to_string(),
             initial_balance: dec!(100000),

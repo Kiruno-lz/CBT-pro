@@ -17,6 +17,7 @@ pub struct EngineConfig {
     pub execution_delay_bars: u32,
     pub allow_future_data: bool,
     pub risk_free_rate: f64,
+    pub default_quantity: Decimal,
 }
 
 impl Default for EngineConfig {
@@ -34,6 +35,7 @@ impl Default for EngineConfig {
             execution_delay_bars: 1,
             allow_future_data: false,
             risk_free_rate: 0.02,
+            default_quantity: Decimal::from(1),
         }
     }
 }

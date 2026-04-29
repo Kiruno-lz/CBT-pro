@@ -1,7 +1,8 @@
 pub mod config;
 pub mod backtest;
-pub mod strategy;
 
 pub use config::EngineConfig;
-pub use backtest::{BacktestEngine, EngineSnapshot, BacktestResult, EngineError, Signal};
-pub use strategy::{Strategy, AlwaysLong, EmaCrossover, RsiMacd, BollingerBands as StrategyBollingerBands, Breakout};
+pub use backtest::{BacktestEngine, EngineSnapshot, BacktestResult, EngineError};
+// Re-export strategy types for backward compatibility
+pub use strategy::{Strategy, Signal, SignalAction, StrategyContext};
+pub use strategy::{AlwaysLong, EmaCrossover, RsiMacd, BollingerBands, Breakout};

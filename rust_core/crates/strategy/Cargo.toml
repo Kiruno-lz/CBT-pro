@@ -1,5 +1,5 @@
 [package]
-name = "engine"
+name = "strategy"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,12 +7,11 @@ edition = "2021"
 orderbook = { path = "../orderbook" }
 data_pipeline = { path = "../data_pipeline" }
 indicators = { path = "../indicators" }
-strategy = { path = "../strategy" }
 rust_decimal = { workspace = true }
-rust_decimal_macros = "1.33"
-tokio = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
-chrono = { workspace = true }
-uuid = { workspace = true }
-tracing = { workspace = true }
+
+[dev-dependencies]
+engine = { path = "../engine" }
+serde_json = { workspace = true }
