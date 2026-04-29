@@ -1,9 +1,11 @@
+use crate::{IndicatorError, IndicatorResult};
 use rust_decimal::Decimal;
-use crate::{IndicatorResult, IndicatorError};
 
 pub fn ema(period: usize, prices: &[Decimal]) -> Result<Vec<IndicatorResult>, IndicatorError> {
     if period == 0 {
-        return Err(IndicatorError::InvalidParameter("period must be > 0".to_string()));
+        return Err(IndicatorError::InvalidParameter(
+            "period must be > 0".to_string(),
+        ));
     }
     if prices.len() < period {
         return Err(IndicatorError::InsufficientData {
@@ -16,9 +18,9 @@ pub fn ema(period: usize, prices: &[Decimal]) -> Result<Vec<IndicatorResult>, In
     let one_minus_k = Decimal::from(1) - k;
     let mut result = Vec::new();
 
-    let mut ema_val: Decimal = prices[..period].iter().copied().sum::<Decimal>() 
-        / Decimal::from(period as i64);
-    
+    let mut ema_val: Decimal =
+        prices[..period].iter().copied().sum::<Decimal>() / Decimal::from(period as i64);
+
     result.push(IndicatorResult {
         value: ema_val,
         timestamp: (period - 1) as i64,
@@ -51,19 +53,19 @@ mod tests {
         ];
         let result = ema(3, &prices).unwrap();
         assert_eq!(result.len(), 4);
-        
+
         // First EMA is SMA of first 3: (10+11+12)/3 = 11
         assert_eq!(result[0].timestamp, 2);
         assert_eq!(result[0].value, Decimal::from(11));
-        
+
         // EMA at index 3: 11*0.5 + 11*0.5 = 11
         assert_eq!(result[1].timestamp, 3);
         assert_eq!(result[1].value, Decimal::from(11));
-        
+
         // EMA at index 4: 13*0.5 + 11*0.5 = 12
         assert_eq!(result[2].timestamp, 4);
         assert_eq!(result[2].value, Decimal::from(12));
-        
+
         // EMA at index 5: 15*0.5 + 12*0.5 = 13.5
         assert_eq!(result[3].timestamp, 5);
         assert_eq!(result[3].value, Decimal::new(135, 1));

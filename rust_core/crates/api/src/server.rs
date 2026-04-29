@@ -1,7 +1,4 @@
 //! Axum REST API server for CBT-Pro engine.
-use std::collections::HashMap;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -11,17 +8,20 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use engine::{BacktestEngine, EngineConfig, EngineSnapshot, BacktestResult};
-use orderbook::{OrderRequest, OrderFill, OrderSide, Direction, OrderType, MarginMode};
 use data_pipeline::{StandardBar, TimeFrame};
+use engine::{BacktestEngine, BacktestResult, EngineConfig, EngineSnapshot};
+use indicators;
+use orderbook::{Direction, MarginMode, OrderFill, OrderRequest, OrderSide, OrderType};
+use rand::rngs::SmallRng;
+use rand::Rng;
+use rand::SeedableRng;
 use rust_decimal::Decimal;
 use std::str::FromStr;
-use rand::rngs::SmallRng;
-use rand::SeedableRng;
-use rand::Rng;
-use indicators;
 
 /// Application state shared across handlers.
 pub type AppState = Arc<Mutex<HashMap<String, BacktestEngine>>>;
@@ -63,7 +63,10 @@ pub fn create_rest_router() -> Router<AppState> {
         .route("/api/v1/order", post(submit_order))
         .route("/api/v1/indicators", get(get_indicators))
         .route("/api/v1/strategies", get(list_strategies))
-        .route("/api/v1/strategies/:id/defaults", get(get_strategy_defaults))
+        .route(
+            "/api/v1/strategies/:id/defaults",
+            get(get_strategy_defaults),
+        )
 }
 
 async fn health_check() -> &'static str {
@@ -83,12 +86,21 @@ async fn start_backtest(
     };
 
     // Parse timeframe
-    let timeframe_str = payload.get("timeframe").and_then(|v| v.as_str()).unwrap_or("1m");
+    let timeframe_str = payload
+        .get("timeframe")
+        .and_then(|v| v.as_str())
+        .unwrap_or("1m");
     let timeframe = TimeFrame::from_string(timeframe_str).unwrap_or(TimeFrame::M1);
 
     // Determine bar count from date range if provided
-    let start_time = payload.get("start_time").and_then(|v| v.as_i64()).unwrap_or(1704067200000);
-    let end_time = payload.get("end_time").and_then(|v| v.as_i64()).unwrap_or(1735689600000);
+    let start_time = payload
+        .get("start_time")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1704067200000);
+    let end_time = payload
+        .get("end_time")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1735689600000);
     let duration_ms = (end_time - start_time).max(0);
     let step_ms = timeframe.as_seconds() * 1000;
     let count = ((duration_ms / step_ms) as usize).max(100).min(10000);
@@ -97,8 +109,14 @@ async fn start_backtest(
     let total_bars = bars.len();
 
     // Build strategy
-    let strategy_id = payload.get("strategy_id").and_then(|v| v.as_str()).unwrap_or("always_long");
-    let strategy_params = payload.get("strategy_params").cloned().unwrap_or(serde_json::json!({}));
+    let strategy_id = payload
+        .get("strategy_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("always_long");
+    let strategy_params = payload
+        .get("strategy_params")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
     let strategy = strategy::available_strategies()
         .into_iter()
         .find(|s| s.id == strategy_id)
@@ -125,11 +143,16 @@ async fn pause_backtest(
     match engines.get_mut(&id) {
         Some(_engine) => {
             // Pause logic would go here - for MVP, just acknowledge
-            Ok(Json(GenericResponse { status: "paused".to_string() }))
+            Ok(Json(GenericResponse {
+                status: "paused".to_string(),
+            }))
         }
-        None => Err((StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Backtest {} not found", id),
-        }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Backtest {} not found", id),
+            }),
+        )),
     }
 }
 
@@ -139,12 +162,15 @@ async fn resume_backtest(
 ) -> Result<Json<GenericResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut engines = state.lock().await;
     match engines.get_mut(&id) {
-        Some(_engine) => {
-            Ok(Json(GenericResponse { status: "running".to_string() }))
-        }
-        None => Err((StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Backtest {} not found", id),
-        }))),
+        Some(_engine) => Ok(Json(GenericResponse {
+            status: "running".to_string(),
+        })),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Backtest {} not found", id),
+            }),
+        )),
     }
 }
 
@@ -158,9 +184,12 @@ async fn get_backtest_state(
             let snapshot = engine.get_state();
             Ok(Json(snapshot))
         }
-        None => Err((StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Backtest {} not found", id),
-        }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Backtest {} not found", id),
+            }),
+        )),
     }
 }
 
@@ -170,17 +199,21 @@ async fn get_backtest_result(
 ) -> Result<Json<BacktestResult>, (StatusCode, Json<ErrorResponse>)> {
     let mut engines = state.lock().await;
     match engines.remove(&id) {
-        Some(mut engine) => {
-            match engine.run() {
-                Ok(result) => Ok(Json(result)),
-                Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse {
+        Some(mut engine) => match engine.run() {
+            Ok(result) => Ok(Json(result)),
+            Err(e) => Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
                     error: format!("Engine error: {}", e),
-                }))),
-            }
-        }
-        None => Err((StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Backtest {} not found", id),
-        }))),
+                }),
+            )),
+        },
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Backtest {} not found", id),
+            }),
+        )),
     }
 }
 
@@ -233,30 +266,45 @@ enum IndicatorType {
 
 fn parse_indicator_name(name: &str) -> Result<IndicatorType, String> {
     let parts: Vec<&str> = name.split('_').collect();
-    
+
     match parts.as_slice() {
         ["ema", period] => {
-            let p = period.parse::<usize>().map_err(|e| format!("Invalid EMA period: {}", e))?;
+            let p = period
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid EMA period: {}", e))?;
             Ok(IndicatorType::Ema(p))
         }
         ["rsi", period] => {
-            let p = period.parse::<usize>().map_err(|e| format!("Invalid RSI period: {}", e))?;
+            let p = period
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid RSI period: {}", e))?;
             Ok(IndicatorType::Rsi(p))
         }
         ["macd", fast, slow, signal] => {
-            let f = fast.parse::<usize>().map_err(|e| format!("Invalid MACD fast period: {}", e))?;
-            let s = slow.parse::<usize>().map_err(|e| format!("Invalid MACD slow period: {}", e))?;
-            let sig = signal.parse::<usize>().map_err(|e| format!("Invalid MACD signal period: {}", e))?;
+            let f = fast
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid MACD fast period: {}", e))?;
+            let s = slow
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid MACD slow period: {}", e))?;
+            let sig = signal
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid MACD signal period: {}", e))?;
             Ok(IndicatorType::Macd(f, s, sig))
         }
         ["bollinger", period, rest @ ..] if !rest.is_empty() => {
-            let p = period.parse::<usize>().map_err(|e| format!("Invalid Bollinger period: {}", e))?;
+            let p = period
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid Bollinger period: {}", e))?;
             let sd_str = rest.join(".");
-            let sd = Decimal::from_str(&sd_str).map_err(|e| format!("Invalid Bollinger std_dev: {}", e))?;
+            let sd = Decimal::from_str(&sd_str)
+                .map_err(|e| format!("Invalid Bollinger std_dev: {}", e))?;
             Ok(IndicatorType::Bollinger(p, sd))
         }
         ["atr", period] => {
-            let p = period.parse::<usize>().map_err(|e| format!("Invalid ATR period: {}", e))?;
+            let p = period
+                .parse::<usize>()
+                .map_err(|e| format!("Invalid ATR period: {}", e))?;
             Ok(IndicatorType::Atr(p))
         }
         ["vwap"] => Ok(IndicatorType::Vwap),
@@ -272,30 +320,26 @@ fn calculate_indicator_last(
     volumes: &[Decimal],
 ) -> Result<Value, String> {
     let indicator = parse_indicator_name(name)?;
-    
+
     let value = match indicator {
-        IndicatorType::Ema(period) => {
-            match indicators::ema::ema(period, closes) {
-                Ok(vals) => vals.last().map(|v| {
-                    serde_json::json!({
-                        "value": v.value.to_string(),
-                        "timestamp": v.timestamp
-                    })
-                }),
-                Err(e) => return Err(format!("EMA calculation error: {}", e)),
-            }
-        }
-        IndicatorType::Rsi(period) => {
-            match indicators::rsi::rsi(period, closes) {
-                Ok(vals) => vals.last().map(|v| {
-                    serde_json::json!({
-                        "value": v.value.to_string(),
-                        "timestamp": v.timestamp
-                    })
-                }),
-                Err(e) => return Err(format!("RSI calculation error: {}", e)),
-            }
-        }
+        IndicatorType::Ema(period) => match indicators::ema::ema(period, closes) {
+            Ok(vals) => vals.last().map(|v| {
+                serde_json::json!({
+                    "value": v.value.to_string(),
+                    "timestamp": v.timestamp
+                })
+            }),
+            Err(e) => return Err(format!("EMA calculation error: {}", e)),
+        },
+        IndicatorType::Rsi(period) => match indicators::rsi::rsi(period, closes) {
+            Ok(vals) => vals.last().map(|v| {
+                serde_json::json!({
+                    "value": v.value.to_string(),
+                    "timestamp": v.timestamp
+                })
+            }),
+            Err(e) => return Err(format!("RSI calculation error: {}", e)),
+        },
         IndicatorType::Bollinger(period, std_dev) => {
             match indicators::bollinger::bollinger(period, std_dev, closes) {
                 Ok(vals) => vals.last().map(|(ir, bb)| {
@@ -322,28 +366,24 @@ fn calculate_indicator_last(
                 Err(e) => return Err(format!("MACD calculation error: {}", e)),
             }
         }
-        IndicatorType::Atr(period) => {
-            match indicators::atr::atr(period, highs, lows, closes) {
-                Ok(vals) => vals.last().map(|v| {
-                    serde_json::json!({
-                        "value": v.value.to_string(),
-                        "timestamp": v.timestamp
-                    })
-                }),
-                Err(e) => return Err(format!("ATR calculation error: {}", e)),
-            }
-        }
-        IndicatorType::Vwap => {
-            match indicators::vwap::vwap(closes, volumes) {
-                Ok(vals) => vals.last().map(|v| {
-                    serde_json::json!({
-                        "value": v.value.to_string(),
-                        "timestamp": v.timestamp
-                    })
-                }),
-                Err(e) => return Err(format!("VWAP calculation error: {}", e)),
-            }
-        }
+        IndicatorType::Atr(period) => match indicators::atr::atr(period, highs, lows, closes) {
+            Ok(vals) => vals.last().map(|v| {
+                serde_json::json!({
+                    "value": v.value.to_string(),
+                    "timestamp": v.timestamp
+                })
+            }),
+            Err(e) => return Err(format!("ATR calculation error: {}", e)),
+        },
+        IndicatorType::Vwap => match indicators::vwap::vwap(closes, volumes) {
+            Ok(vals) => vals.last().map(|v| {
+                serde_json::json!({
+                    "value": v.value.to_string(),
+                    "timestamp": v.timestamp
+                })
+            }),
+            Err(e) => return Err(format!("VWAP calculation error: {}", e)),
+        },
     };
 
     Ok(value.unwrap_or(Value::Null))
@@ -358,50 +398,64 @@ fn calculate_indicator_series(
     bars: &[StandardBar],
 ) -> Result<Value, String> {
     let indicator = parse_indicator_name(name)?;
-    
+
     let series = match indicator {
-        IndicatorType::Ema(period) => {
-            match indicators::ema::ema(period, closes) {
-                Ok(vals) => {
-                    let arr: Vec<Value> = vals.iter().map(|v| {
-                        let ts = bars.get(v.timestamp as usize).map(|b| b.timestamp).unwrap_or(v.timestamp);
+        IndicatorType::Ema(period) => match indicators::ema::ema(period, closes) {
+            Ok(vals) => {
+                let arr: Vec<Value> = vals
+                    .iter()
+                    .map(|v| {
+                        let ts = bars
+                            .get(v.timestamp as usize)
+                            .map(|b| b.timestamp)
+                            .unwrap_or(v.timestamp);
                         serde_json::json!({
                             "value": v.value.to_string(),
                             "timestamp": ts
                         })
-                    }).collect();
-                    Value::Array(arr)
-                }
-                Err(e) => return Err(format!("EMA calculation error: {}", e)),
+                    })
+                    .collect();
+                Value::Array(arr)
             }
-        }
-        IndicatorType::Rsi(period) => {
-            match indicators::rsi::rsi(period, closes) {
-                Ok(vals) => {
-                    let arr: Vec<Value> = vals.iter().map(|v| {
-                        let ts = bars.get(v.timestamp as usize).map(|b| b.timestamp).unwrap_or(v.timestamp);
+            Err(e) => return Err(format!("EMA calculation error: {}", e)),
+        },
+        IndicatorType::Rsi(period) => match indicators::rsi::rsi(period, closes) {
+            Ok(vals) => {
+                let arr: Vec<Value> = vals
+                    .iter()
+                    .map(|v| {
+                        let ts = bars
+                            .get(v.timestamp as usize)
+                            .map(|b| b.timestamp)
+                            .unwrap_or(v.timestamp);
                         serde_json::json!({
                             "value": v.value.to_string(),
                             "timestamp": ts
                         })
-                    }).collect();
-                    Value::Array(arr)
-                }
-                Err(e) => return Err(format!("RSI calculation error: {}", e)),
+                    })
+                    .collect();
+                Value::Array(arr)
             }
-        }
+            Err(e) => return Err(format!("RSI calculation error: {}", e)),
+        },
         IndicatorType::Bollinger(period, std_dev) => {
             match indicators::bollinger::bollinger(period, std_dev, closes) {
                 Ok(vals) => {
-                    let arr: Vec<Value> = vals.iter().map(|(ir, bb)| {
-                        let ts = bars.get(ir.timestamp as usize).map(|b| b.timestamp).unwrap_or(ir.timestamp);
-                        serde_json::json!({
-                            "upper": bb.upper.to_string(),
-                            "middle": bb.middle.to_string(),
-                            "lower": bb.lower.to_string(),
-                            "timestamp": ts
+                    let arr: Vec<Value> = vals
+                        .iter()
+                        .map(|(ir, bb)| {
+                            let ts = bars
+                                .get(ir.timestamp as usize)
+                                .map(|b| b.timestamp)
+                                .unwrap_or(ir.timestamp);
+                            serde_json::json!({
+                                "upper": bb.upper.to_string(),
+                                "middle": bb.middle.to_string(),
+                                "lower": bb.lower.to_string(),
+                                "timestamp": ts
+                            })
                         })
-                    }).collect();
+                        .collect();
                     Value::Array(arr)
                 }
                 Err(e) => return Err(format!("Bollinger Bands calculation error: {}", e)),
@@ -410,50 +464,64 @@ fn calculate_indicator_series(
         IndicatorType::Macd(fast, slow, signal) => {
             match indicators::macd::macd(fast, slow, signal, closes) {
                 Ok(vals) => {
-                    let arr: Vec<Value> = vals.iter().map(|(ir, mr)| {
-                        let ts = bars.get(ir.timestamp as usize).map(|b| b.timestamp).unwrap_or(ir.timestamp);
-                        serde_json::json!({
-                            "macd": mr.macd.to_string(),
-                            "signal": mr.signal.to_string(),
-                            "histogram": mr.histogram.to_string(),
-                            "timestamp": ts
+                    let arr: Vec<Value> = vals
+                        .iter()
+                        .map(|(ir, mr)| {
+                            let ts = bars
+                                .get(ir.timestamp as usize)
+                                .map(|b| b.timestamp)
+                                .unwrap_or(ir.timestamp);
+                            serde_json::json!({
+                                "macd": mr.macd.to_string(),
+                                "signal": mr.signal.to_string(),
+                                "histogram": mr.histogram.to_string(),
+                                "timestamp": ts
+                            })
                         })
-                    }).collect();
+                        .collect();
                     Value::Array(arr)
                 }
                 Err(e) => return Err(format!("MACD calculation error: {}", e)),
             }
         }
-        IndicatorType::Atr(period) => {
-            match indicators::atr::atr(period, highs, lows, closes) {
-                Ok(vals) => {
-                    let arr: Vec<Value> = vals.iter().map(|v| {
-                        let ts = bars.get(v.timestamp as usize).map(|b| b.timestamp).unwrap_or(v.timestamp);
+        IndicatorType::Atr(period) => match indicators::atr::atr(period, highs, lows, closes) {
+            Ok(vals) => {
+                let arr: Vec<Value> = vals
+                    .iter()
+                    .map(|v| {
+                        let ts = bars
+                            .get(v.timestamp as usize)
+                            .map(|b| b.timestamp)
+                            .unwrap_or(v.timestamp);
                         serde_json::json!({
                             "value": v.value.to_string(),
                             "timestamp": ts
                         })
-                    }).collect();
-                    Value::Array(arr)
-                }
-                Err(e) => return Err(format!("ATR calculation error: {}", e)),
+                    })
+                    .collect();
+                Value::Array(arr)
             }
-        }
-        IndicatorType::Vwap => {
-            match indicators::vwap::vwap(closes, volumes) {
-                Ok(vals) => {
-                    let arr: Vec<Value> = vals.iter().map(|v| {
-                        let ts = bars.get(v.timestamp as usize).map(|b| b.timestamp).unwrap_or(v.timestamp);
+            Err(e) => return Err(format!("ATR calculation error: {}", e)),
+        },
+        IndicatorType::Vwap => match indicators::vwap::vwap(closes, volumes) {
+            Ok(vals) => {
+                let arr: Vec<Value> = vals
+                    .iter()
+                    .map(|v| {
+                        let ts = bars
+                            .get(v.timestamp as usize)
+                            .map(|b| b.timestamp)
+                            .unwrap_or(v.timestamp);
                         serde_json::json!({
                             "value": v.value.to_string(),
                             "timestamp": ts
                         })
-                    }).collect();
-                    Value::Array(arr)
-                }
-                Err(e) => return Err(format!("VWAP calculation error: {}", e)),
+                    })
+                    .collect();
+                Value::Array(arr)
             }
-        }
+            Err(e) => return Err(format!("VWAP calculation error: {}", e)),
+        },
     };
 
     Ok(series)
@@ -479,9 +547,12 @@ async fn get_indicators(
                 bars = processed.to_vec();
             }
             None => {
-                return Err((StatusCode::NOT_FOUND, Json(ErrorResponse {
-                    error: format!("Backtest {} not found", backtest_id),
-                })));
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    Json(ErrorResponse {
+                        error: format!("Backtest {} not found", backtest_id),
+                    }),
+                ));
             }
         }
     } else {
@@ -537,18 +608,19 @@ async fn get_strategy_defaults(
     let strategies = strategy::available_strategies();
 
     match strategies.into_iter().find(|s| s.id == id) {
-        Some(info) => {
-            Ok(Json(serde_json::json!({
-                "id": info.id,
-                "name": info.name,
-                "description": info.description,
-                "default_params": info.default_params,
-                "param_definitions": info.param_definitions,
-            })))
-        }
-        None => Err((StatusCode::NOT_FOUND, Json(ErrorResponse {
-            error: format!("Strategy {} not found", id),
+        Some(info) => Ok(Json(serde_json::json!({
+            "id": info.id,
+            "name": info.name,
+            "description": info.description,
+            "default_params": info.default_params,
+            "param_definitions": info.param_definitions,
         }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("Strategy {} not found", id),
+            }),
+        )),
     }
 }
 
@@ -597,8 +669,16 @@ fn parse_engine_config(payload: &Value) -> Result<EngineConfig, String> {
 }
 
 fn parse_order_request(payload: Value) -> Result<OrderRequest, String> {
-    let order_id = payload.get("order_id").and_then(|v| v.as_str()).map(|s| Uuid::parse_str(s).unwrap_or_else(|_| Uuid::new_v4())).unwrap_or_else(Uuid::new_v4);
-    let symbol = payload.get("symbol").and_then(|v| v.as_str()).unwrap_or("BTC-USDT").to_string();
+    let order_id = payload
+        .get("order_id")
+        .and_then(|v| v.as_str())
+        .map(|s| Uuid::parse_str(s).unwrap_or_else(|_| Uuid::new_v4()))
+        .unwrap_or_else(Uuid::new_v4);
+    let symbol = payload
+        .get("symbol")
+        .and_then(|v| v.as_str())
+        .unwrap_or("BTC-USDT")
+        .to_string();
     let side = match payload.get("side").and_then(|v| v.as_str()) {
         Some("Sell") => OrderSide::Sell,
         _ => OrderSide::Buy,
@@ -607,8 +687,20 @@ fn parse_order_request(payload: Value) -> Result<OrderRequest, String> {
         Some("Short") => Direction::Short,
         _ => Direction::Long,
     };
-    let quantity = Decimal::from_str(payload.get("quantity").and_then(|v| v.as_str()).unwrap_or("0")).map_err(|e| e.to_string())?;
-    let leverage = Decimal::from_str(payload.get("leverage").and_then(|v| v.as_str()).unwrap_or("1")).unwrap_or_else(|_| Decimal::from(1));
+    let quantity = Decimal::from_str(
+        payload
+            .get("quantity")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0"),
+    )
+    .map_err(|e| e.to_string())?;
+    let leverage = Decimal::from_str(
+        payload
+            .get("leverage")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1"),
+    )
+    .unwrap_or_else(|_| Decimal::from(1));
 
     Ok(OrderRequest {
         order_id,
@@ -620,9 +712,20 @@ fn parse_order_request(payload: Value) -> Result<OrderRequest, String> {
         margin_mode: MarginMode::Cross,
         leverage,
         timestamp: chrono::Utc::now().timestamp_millis(),
-        strategy_id: payload.get("strategy_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string(),
-        signal_strength: payload.get("signal_strength").and_then(|v| v.as_f64()).unwrap_or(0.5),
-        signal_reason: payload.get("signal_reason").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        strategy_id: payload
+            .get("strategy_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        signal_strength: payload
+            .get("signal_strength")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.5),
+        signal_reason: payload
+            .get("signal_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -668,10 +771,16 @@ mod tests {
 
         // 检测5周期循环
         let has_5_cycle = detect_price_cycle(&closes, 5, 3);
-        assert!(!has_5_cycle, "修复后的 generate_synthetic_bars 不应存在5周期价格循环");
+        assert!(
+            !has_5_cycle,
+            "修复后的 generate_synthetic_bars 不应存在5周期价格循环"
+        );
 
         let has_5_volume_cycle = detect_volume_cycle(&volumes, 5, 3);
-        assert!(!has_5_volume_cycle, "修复后的 generate_synthetic_bars 不应存在5周期volume循环");
+        assert!(
+            !has_5_volume_cycle,
+            "修复后的 generate_synthetic_bars 不应存在5周期volume循环"
+        );
     }
 
     #[test]
@@ -803,7 +912,8 @@ mod tests {
         assert_eq!(config.margin_mode, MarginMode::Isolated);
         assert_eq!(config.default_leverage, Decimal::from(20));
 
-        let tf = TimeFrame::from_string(payload.get("timeframe").unwrap().as_str().unwrap()).unwrap();
+        let tf =
+            TimeFrame::from_string(payload.get("timeframe").unwrap().as_str().unwrap()).unwrap();
         assert_eq!(tf, TimeFrame::H1);
 
         let start_time = payload.get("start_time").unwrap().as_i64().unwrap();
@@ -845,12 +955,24 @@ mod tests {
 
         // Verify values are not null (real calculated values)
         let ema_value = &obj["ema_9"];
-        assert!(!ema_value.is_null(), "ema_9 should have a real calculated value");
-        assert!(ema_value.get("value").is_some(), "ema_9 should have a value field");
+        assert!(
+            !ema_value.is_null(),
+            "ema_9 should have a real calculated value"
+        );
+        assert!(
+            ema_value.get("value").is_some(),
+            "ema_9 should have a value field"
+        );
 
         let rsi_value = &obj["rsi_14"];
-        assert!(!rsi_value.is_null(), "rsi_14 should have a real calculated value");
-        assert!(rsi_value.get("value").is_some(), "rsi_14 should have a value field");
+        assert!(
+            !rsi_value.is_null(),
+            "rsi_14 should have a real calculated value"
+        );
+        assert!(
+            rsi_value.get("value").is_some(),
+            "rsi_14 should have a value field"
+        );
     }
 
     #[tokio::test]
@@ -896,7 +1018,10 @@ mod tests {
         };
 
         let result = get_indicators(State(state), Query(query)).await;
-        assert!(result.is_ok(), "get_indicators with backtest_id should succeed");
+        assert!(
+            result.is_ok(),
+            "get_indicators with backtest_id should succeed"
+        );
 
         let json = match result {
             Ok(Json(v)) => v,
@@ -908,8 +1033,14 @@ mod tests {
         assert!(obj.contains_key("rsi_14"), "Response should contain rsi_14");
 
         let ema_value = &obj["ema_9"];
-        assert!(!ema_value.is_null(), "ema_9 should have a real calculated value");
-        assert!(ema_value.get("value").is_some(), "ema_9 should have a value field");
+        assert!(
+            !ema_value.is_null(),
+            "ema_9 should have a real calculated value"
+        );
+        assert!(
+            ema_value.get("value").is_some(),
+            "ema_9 should have a value field"
+        );
     }
 
     #[tokio::test]
@@ -924,7 +1055,10 @@ mod tests {
         };
 
         let result = get_indicators(State(state), Query(query)).await;
-        assert!(result.is_ok(), "get_indicators with full=true should succeed");
+        assert!(
+            result.is_ok(),
+            "get_indicators with full=true should succeed"
+        );
 
         let json = match result {
             Ok(Json(v)) => v,
@@ -935,12 +1069,22 @@ mod tests {
         assert!(obj.contains_key("ema_9"), "Response should contain ema_9");
         assert!(obj.contains_key("rsi_14"), "Response should contain rsi_14");
 
-        let ema_series = obj["ema_9"].as_array().expect("ema_9 should be an array when full=true");
+        let ema_series = obj["ema_9"]
+            .as_array()
+            .expect("ema_9 should be an array when full=true");
         assert!(!ema_series.is_empty(), "ema_9 series should not be empty");
-        assert!(ema_series[0].get("value").is_some(), "ema_9 series item should have value");
-        assert!(ema_series[0].get("timestamp").is_some(), "ema_9 series item should have timestamp");
+        assert!(
+            ema_series[0].get("value").is_some(),
+            "ema_9 series item should have value"
+        );
+        assert!(
+            ema_series[0].get("timestamp").is_some(),
+            "ema_9 series item should have timestamp"
+        );
 
-        let rsi_series = obj["rsi_14"].as_array().expect("rsi_14 should be an array when full=true");
+        let rsi_series = obj["rsi_14"]
+            .as_array()
+            .expect("rsi_14 should be an array when full=true");
         assert!(!rsi_series.is_empty(), "rsi_14 series should not be empty");
     }
 
@@ -956,10 +1100,17 @@ mod tests {
         };
 
         let result = get_indicators(State(state), Query(query)).await;
-        assert!(result.is_err(), "get_indicators with invalid backtest_id should fail");
+        assert!(
+            result.is_err(),
+            "get_indicators with invalid backtest_id should fail"
+        );
 
         let (status, _) = result.unwrap_err();
-        assert_eq!(status, StatusCode::NOT_FOUND, "Should return 404 for invalid backtest_id");
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "Should return 404 for invalid backtest_id"
+        );
     }
 
     #[tokio::test]
@@ -974,7 +1125,10 @@ mod tests {
         };
 
         let result = get_indicators(State(state), Query(query)).await;
-        assert!(result.is_ok(), "get_indicators with custom params should succeed");
+        assert!(
+            result.is_ok(),
+            "get_indicators with custom params should succeed"
+        );
 
         let json = match result {
             Ok(Json(v)) => v,
@@ -984,19 +1138,40 @@ mod tests {
 
         // Verify all custom indicators are present and have real values
         assert!(obj.contains_key("ema_5"), "Response should contain ema_5");
-        assert!(!obj["ema_5"].is_null(), "ema_5 should have a real calculated value");
+        assert!(
+            !obj["ema_5"].is_null(),
+            "ema_5 should have a real calculated value"
+        );
 
         assert!(obj.contains_key("rsi_10"), "Response should contain rsi_10");
-        assert!(!obj["rsi_10"].is_null(), "rsi_10 should have a real calculated value");
+        assert!(
+            !obj["rsi_10"].is_null(),
+            "rsi_10 should have a real calculated value"
+        );
 
-        assert!(obj.contains_key("macd_8_17_9"), "Response should contain macd_8_17_9");
-        assert!(!obj["macd_8_17_9"].is_null(), "macd_8_17_9 should have a real calculated value");
+        assert!(
+            obj.contains_key("macd_8_17_9"),
+            "Response should contain macd_8_17_9"
+        );
+        assert!(
+            !obj["macd_8_17_9"].is_null(),
+            "macd_8_17_9 should have a real calculated value"
+        );
 
-        assert!(obj.contains_key("bollinger_15_2_5"), "Response should contain bollinger_15_2_5");
-        assert!(!obj["bollinger_15_2_5"].is_null(), "bollinger_15_2_5 should have a real calculated value");
+        assert!(
+            obj.contains_key("bollinger_15_2_5"),
+            "Response should contain bollinger_15_2_5"
+        );
+        assert!(
+            !obj["bollinger_15_2_5"].is_null(),
+            "bollinger_15_2_5 should have a real calculated value"
+        );
 
         assert!(obj.contains_key("atr_10"), "Response should contain atr_10");
-        assert!(!obj["atr_10"].is_null(), "atr_10 should have a real calculated value");
+        assert!(
+            !obj["atr_10"].is_null(),
+            "atr_10 should have a real calculated value"
+        );
     }
 
     #[tokio::test]
@@ -1011,7 +1186,10 @@ mod tests {
         };
 
         let result = get_indicators(State(state), Query(query)).await;
-        assert!(result.is_ok(), "get_indicators with bollinger_15_2 should succeed");
+        assert!(
+            result.is_ok(),
+            "get_indicators with bollinger_15_2 should succeed"
+        );
 
         let json = match result {
             Ok(Json(v)) => v,
@@ -1020,14 +1198,29 @@ mod tests {
         let obj = json.as_object().expect("Response should be a JSON object");
 
         // Verify bollinger_15_2 is present and has real values
-        assert!(obj.contains_key("bollinger_15_2"), "Response should contain bollinger_15_2");
-        assert!(!obj["bollinger_15_2"].is_null(), "bollinger_15_2 should have a real calculated value");
-        
+        assert!(
+            obj.contains_key("bollinger_15_2"),
+            "Response should contain bollinger_15_2"
+        );
+        assert!(
+            !obj["bollinger_15_2"].is_null(),
+            "bollinger_15_2 should have a real calculated value"
+        );
+
         // Verify it has the expected Bollinger Bands fields
         let bb_value = &obj["bollinger_15_2"];
-        assert!(bb_value.get("upper").is_some(), "bollinger_15_2 should have upper field");
-        assert!(bb_value.get("middle").is_some(), "bollinger_15_2 should have middle field");
-        assert!(bb_value.get("lower").is_some(), "bollinger_15_2 should have lower field");
+        assert!(
+            bb_value.get("upper").is_some(),
+            "bollinger_15_2 should have upper field"
+        );
+        assert!(
+            bb_value.get("middle").is_some(),
+            "bollinger_15_2 should have middle field"
+        );
+        assert!(
+            bb_value.get("lower").is_some(),
+            "bollinger_15_2 should have lower field"
+        );
     }
 
     #[tokio::test]
@@ -1066,17 +1259,28 @@ mod tests {
         };
 
         let result_before = get_indicators(State(state.clone()), Query(query_before)).await;
-        assert!(result_before.is_ok(), "get_indicators should succeed even with no bars processed");
+        assert!(
+            result_before.is_ok(),
+            "get_indicators should succeed even with no bars processed"
+        );
 
         let json_before = match result_before {
             Ok(Json(v)) => v,
             Err(_) => panic!("Expected Ok result"),
         };
-        let obj_before = json_before.as_object().expect("Response should be a JSON object");
-        
+        let obj_before = json_before
+            .as_object()
+            .expect("Response should be a JSON object");
+
         // Should return empty object since no bars processed yet
-        assert!(obj_before.is_empty() || obj_before["ema_9"].is_null() || obj_before["ema_9"].as_array().map_or(true, |a| a.is_empty()),
-            "Before stepping, indicator should be empty or null");
+        assert!(
+            obj_before.is_empty()
+                || obj_before["ema_9"].is_null()
+                || obj_before["ema_9"]
+                    .as_array()
+                    .map_or(true, |a| a.is_empty()),
+            "Before stepping, indicator should be empty or null"
+        );
 
         // Step the engine a few times
         {
@@ -1097,24 +1301,40 @@ mod tests {
         };
 
         let result_after = get_indicators(State(state.clone()), Query(query_after)).await;
-        assert!(result_after.is_ok(), "get_indicators should succeed after stepping");
+        assert!(
+            result_after.is_ok(),
+            "get_indicators should succeed after stepping"
+        );
 
         let json_after = match result_after {
             Ok(Json(v)) => v,
             Err(_) => panic!("Expected Ok result"),
         };
-        let obj_after = json_after.as_object().expect("Response should be a JSON object");
+        let obj_after = json_after
+            .as_object()
+            .expect("Response should be a JSON object");
 
-        assert!(obj_after.contains_key("ema_9"), "Response should contain ema_9 after stepping");
-        let ema_series = obj_after["ema_9"].as_array().expect("ema_9 should be an array when full=true");
-        
+        assert!(
+            obj_after.contains_key("ema_9"),
+            "Response should contain ema_9 after stepping"
+        );
+        let ema_series = obj_after["ema_9"]
+            .as_array()
+            .expect("ema_9 should be an array when full=true");
+
         // Should have at most 20 data points (only processed bars)
-        assert!(ema_series.len() <= 20, 
-            "Indicator series should be limited to processed bars (<=20), got {}", ema_series.len());
-        
+        assert!(
+            ema_series.len() <= 20,
+            "Indicator series should be limited to processed bars (<=20), got {}",
+            ema_series.len()
+        );
+
         // Should NOT have all bars
-        assert!(ema_series.len() < total_bars,
-            "Indicator series should not include all {} bars, only processed ones", total_bars);
+        assert!(
+            ema_series.len() < total_bars,
+            "Indicator series should not include all {} bars, only processed ones",
+            total_bars
+        );
     }
 
     #[test]
@@ -1122,28 +1342,28 @@ mod tests {
         // EMA
         let ema = parse_indicator_name("ema_5").unwrap();
         assert!(matches!(ema, IndicatorType::Ema(5)));
-        
+
         let ema2 = parse_indicator_name("ema_21").unwrap();
         assert!(matches!(ema2, IndicatorType::Ema(21)));
 
         // RSI
         let rsi = parse_indicator_name("rsi_14").unwrap();
         assert!(matches!(rsi, IndicatorType::Rsi(14)));
-        
+
         let rsi2 = parse_indicator_name("rsi_10").unwrap();
         assert!(matches!(rsi2, IndicatorType::Rsi(10)));
 
         // MACD
         let macd = parse_indicator_name("macd_12_26_9").unwrap();
         assert!(matches!(macd, IndicatorType::Macd(12, 26, 9)));
-        
+
         let macd2 = parse_indicator_name("macd_8_17_9").unwrap();
         assert!(matches!(macd2, IndicatorType::Macd(8, 17, 9)));
 
         // Bollinger
         let bb = parse_indicator_name("bollinger_20_2").unwrap();
         assert!(matches!(bb, IndicatorType::Bollinger(20, d) if d == Decimal::from(2)));
-        
+
         let bb2 = parse_indicator_name("bollinger_15_2_5").unwrap();
         let expected_2_5 = Decimal::from_str("2.5").unwrap();
         assert!(matches!(bb2, IndicatorType::Bollinger(15, d) if d == expected_2_5));
@@ -1155,7 +1375,7 @@ mod tests {
         // ATR
         let atr = parse_indicator_name("atr_14").unwrap();
         assert!(matches!(atr, IndicatorType::Atr(14)));
-        
+
         let atr2 = parse_indicator_name("atr_10").unwrap();
         assert!(matches!(atr2, IndicatorType::Atr(10)));
 
@@ -1176,14 +1396,23 @@ mod tests {
         let highs: Vec<Decimal> = bars.iter().map(|b| b.high).collect();
         let lows: Vec<Decimal> = bars.iter().map(|b| b.low).collect();
         let volumes: Vec<Decimal> = bars.iter().map(|b| b.volume).collect();
-        
+
         // Test series calculation
-        let result = calculate_indicator_series("bollinger_15_2", &closes, &highs, &lows, &volumes, &bars);
-        assert!(result.is_ok(), "bollinger_15_2 series calculation failed: {:?}", result.err());
-        
+        let result =
+            calculate_indicator_series("bollinger_15_2", &closes, &highs, &lows, &volumes, &bars);
+        assert!(
+            result.is_ok(),
+            "bollinger_15_2 series calculation failed: {:?}",
+            result.err()
+        );
+
         // Test last value calculation
         let result = calculate_indicator_last("bollinger_15_2", &closes, &highs, &lows, &volumes);
-        assert!(result.is_ok(), "bollinger_15_2 last value calculation failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "bollinger_15_2 last value calculation failed: {:?}",
+            result.err()
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1210,24 +1439,39 @@ mod tests {
             .collect();
 
         assert!(ids.contains(&"always_long"), "Should include always_long");
-        assert!(ids.contains(&"ema_crossover"), "Should include ema_crossover");
+        assert!(
+            ids.contains(&"ema_crossover"),
+            "Should include ema_crossover"
+        );
         assert!(ids.contains(&"rsi_macd"), "Should include rsi_macd");
-        assert!(ids.contains(&"bollinger_bands"), "Should include bollinger_bands");
+        assert!(
+            ids.contains(&"bollinger_bands"),
+            "Should include bollinger_bands"
+        );
         assert!(ids.contains(&"breakout"), "Should include breakout");
 
         // Verify each strategy has required fields
         for strategy in strategies {
             assert!(strategy.get("id").is_some(), "Strategy should have id");
             assert!(strategy.get("name").is_some(), "Strategy should have name");
-            assert!(strategy.get("description").is_some(), "Strategy should have description");
-            assert!(strategy.get("default_params").is_some(), "Strategy should have default_params");
+            assert!(
+                strategy.get("description").is_some(),
+                "Strategy should have description"
+            );
+            assert!(
+                strategy.get("default_params").is_some(),
+                "Strategy should have default_params"
+            );
         }
     }
 
     #[tokio::test]
     async fn test_get_strategy_defaults_ema_crossover() {
         let result = get_strategy_defaults(Path("ema_crossover".to_string())).await;
-        assert!(result.is_ok(), "get_strategy_defaults should succeed for ema_crossover");
+        assert!(
+            result.is_ok(),
+            "get_strategy_defaults should succeed for ema_crossover"
+        );
 
         let json = match result {
             Ok(Json(v)) => v,
@@ -1237,23 +1481,87 @@ mod tests {
         assert_eq!(json.get("name").unwrap().as_str().unwrap(), "EMA Crossover");
 
         let param_defs = json.get("param_definitions").unwrap().as_array().unwrap();
-        assert_eq!(param_defs.len(), 2, "EMA Crossover should have 2 param definitions");
+        assert_eq!(
+            param_defs.len(),
+            2,
+            "EMA Crossover should have 2 param definitions"
+        );
 
         // Verify fast_period definition
         let fast_period = &param_defs[0];
-        assert_eq!(fast_period.get("name").unwrap().as_str().unwrap(), "fast_period");
+        assert_eq!(
+            fast_period.get("name").unwrap().as_str().unwrap(),
+            "fast_period"
+        );
         let fast_type = fast_period.get("param_type").unwrap();
-        assert_eq!(fast_type.get("Integer").unwrap().get("min").unwrap().as_i64().unwrap(), 2);
-        assert_eq!(fast_type.get("Integer").unwrap().get("max").unwrap().as_i64().unwrap(), 100);
-        assert_eq!(fast_type.get("Integer").unwrap().get("default").unwrap().as_i64().unwrap(), 9);
+        assert_eq!(
+            fast_type
+                .get("Integer")
+                .unwrap()
+                .get("min")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            fast_type
+                .get("Integer")
+                .unwrap()
+                .get("max")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            100
+        );
+        assert_eq!(
+            fast_type
+                .get("Integer")
+                .unwrap()
+                .get("default")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            9
+        );
 
         // Verify slow_period definition
         let slow_period = &param_defs[1];
-        assert_eq!(slow_period.get("name").unwrap().as_str().unwrap(), "slow_period");
+        assert_eq!(
+            slow_period.get("name").unwrap().as_str().unwrap(),
+            "slow_period"
+        );
         let slow_type = slow_period.get("param_type").unwrap();
-        assert_eq!(slow_type.get("Integer").unwrap().get("min").unwrap().as_i64().unwrap(), 2);
-        assert_eq!(slow_type.get("Integer").unwrap().get("max").unwrap().as_i64().unwrap(), 200);
-        assert_eq!(slow_type.get("Integer").unwrap().get("default").unwrap().as_i64().unwrap(), 21);
+        assert_eq!(
+            slow_type
+                .get("Integer")
+                .unwrap()
+                .get("min")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            slow_type
+                .get("Integer")
+                .unwrap()
+                .get("max")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            200
+        );
+        assert_eq!(
+            slow_type
+                .get("Integer")
+                .unwrap()
+                .get("default")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
+            21
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1281,19 +1589,28 @@ mod tests {
         });
 
         let result = start_backtest(State(state.clone()), Json(payload)).await;
-        assert!(result.is_ok(), "start_backtest with custom params should succeed");
+        assert!(
+            result.is_ok(),
+            "start_backtest with custom params should succeed"
+        );
 
         let response = match result {
             Ok(Json(v)) => v,
             Err(_) => panic!("Expected Ok result"),
         };
         assert_eq!(response.status, "running");
-        assert!(!response.backtest_id.is_empty(), "backtest_id should not be empty");
+        assert!(
+            !response.backtest_id.is_empty(),
+            "backtest_id should not be empty"
+        );
         assert!(response.total_bars > 0, "total_bars should be positive");
 
         // Verify engine was stored in state
         let engines = state.lock().await;
-        assert!(engines.contains_key(&response.backtest_id), "Engine should be stored in state");
+        assert!(
+            engines.contains_key(&response.backtest_id),
+            "Engine should be stored in state"
+        );
     }
 
     #[tokio::test]
@@ -1315,7 +1632,10 @@ mod tests {
         let result = start_backtest(State(state.clone()), Json(payload)).await;
         // Even with invalid strategy, start_backtest currently creates an engine without strategy
         // and returns success. Verify that engine is created but with None strategy.
-        assert!(result.is_ok(), "start_backtest should still succeed (engine created without strategy)");
+        assert!(
+            result.is_ok(),
+            "start_backtest should still succeed (engine created without strategy)"
+        );
 
         let response = match result {
             Ok(Json(v)) => v,

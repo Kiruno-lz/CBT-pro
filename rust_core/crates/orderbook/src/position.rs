@@ -1,11 +1,11 @@
-use rust_decimal::Decimal;
-use uuid::Uuid;
-use crate::{
-    Direction, OrderBookError, OrderFill, Position, PositionBook,
-    PositionId, PositionLeg, PositionStatus, CostBasisMethod, OrderRequest,
-};
 use crate::margin::MarginCalculator;
+use crate::{
+    CostBasisMethod, Direction, OrderBookError, OrderFill, OrderRequest, Position, PositionBook,
+    PositionId, PositionLeg, PositionStatus,
+};
+use rust_decimal::Decimal;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Manages an in-memory position book with full open/add/reduce/close lifecycle.
 pub trait OrderBookManager {
@@ -165,8 +165,8 @@ impl OrderBookManager for InMemoryOrderBook {
         pos.entries.push(leg);
 
         // Weighted average recalculation
-        let total_cost = pos.average_entry_price * pos.current_size
-            + fill.filled_price * fill.filled_quantity;
+        let total_cost =
+            pos.average_entry_price * pos.current_size + fill.filled_price * fill.filled_quantity;
         pos.current_size += fill.filled_quantity;
         pos.average_entry_price = total_cost / pos.current_size;
         pos.updated_at = fill.timestamp;
@@ -551,12 +551,8 @@ mod tests {
         let entry = dec!(40000);
         let leverage = dec!(10);
         let maintenance_rate = dec!(0.005);
-        let liq_price = MarginCalculator::liquidation_price(
-            entry,
-            leverage,
-            maintenance_rate,
-            Direction::Long,
-        );
+        let liq_price =
+            MarginCalculator::liquidation_price(entry, leverage, maintenance_rate, Direction::Long);
         // Long liq = 40000 * (1 - 0.1 + 0.005) = 40000 * 0.905 = 36200
         assert_eq!(liq_price, dec!(36200));
 

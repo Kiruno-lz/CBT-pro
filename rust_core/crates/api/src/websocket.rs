@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use engine::{EngineSnapshot, BacktestResult};
+use engine::{BacktestResult, EngineSnapshot};
 
 use crate::AppState;
 
@@ -15,7 +15,10 @@ use crate::AppState;
 #[serde(tag = "type")]
 enum ClientMessage {
     #[serde(rename = "subscribe")]
-    Subscribe { channel: String, backtest_id: String },
+    Subscribe {
+        channel: String,
+        backtest_id: String,
+    },
     #[serde(rename = "control")]
     Control { action: String, speed: Option<f64> },
 }
@@ -37,10 +40,7 @@ enum ServerMessage {
     Error { message: String },
 }
 
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -57,7 +57,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         match msg {
             Message::Text(text) => {
                 match serde_json::from_str::<ClientMessage>(&text) {
-                    Ok(ClientMessage::Subscribe { channel, backtest_id }) => {
+                    Ok(ClientMessage::Subscribe {
+                        channel,
+                        backtest_id,
+                    }) => {
                         if channel == "backtest_state" {
                             current_backtest_id = Some(backtest_id.clone());
                             // Send initial snapshot
@@ -65,7 +68,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             if let Some(engine) = engines.get(&backtest_id) {
                                 let snapshot = engine.get_state();
                                 let resp = ServerMessage::Snapshot { data: snapshot };
-                                let _ = socket.send(Message::Text(serde_json::to_string(&resp).unwrap())).await;
+                                let _ = socket
+                                    .send(Message::Text(serde_json::to_string(&resp).unwrap()))
+                                    .await;
                             }
                         }
                     }
@@ -81,23 +86,48 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                     "step_forward" | "play" => {
                                         if let Some(snapshot) = engine.step() {
                                             // Send snapshot
-                                            let resp = ServerMessage::Snapshot { data: snapshot.clone() };
-                                            let _ = socket.send(Message::Text(serde_json::to_string(&resp).unwrap())).await;
+                                            let resp = ServerMessage::Snapshot {
+                                                data: snapshot.clone(),
+                                            };
+                                            let _ = socket
+                                                .send(Message::Text(
+                                                    serde_json::to_string(&resp).unwrap(),
+                                                ))
+                                                .await;
 
                                             // Send bar_update
-                                            let bar_resp = ServerMessage::BarUpdate { bar: serde_json::to_value(&snapshot.current_bar).unwrap() };
-                                            let _ = socket.send(Message::Text(serde_json::to_string(&bar_resp).unwrap())).await;
+                                            let bar_resp = ServerMessage::BarUpdate {
+                                                bar: serde_json::to_value(&snapshot.current_bar)
+                                                    .unwrap(),
+                                            };
+                                            let _ = socket
+                                                .send(Message::Text(
+                                                    serde_json::to_string(&bar_resp).unwrap(),
+                                                ))
+                                                .await;
 
                                             // Send signals
                                             for signal in &snapshot.signals {
-                                                let sig_resp = ServerMessage::Signal { signal: serde_json::to_value(signal).unwrap() };
-                                                let _ = socket.send(Message::Text(serde_json::to_string(&sig_resp).unwrap())).await;
+                                                let sig_resp = ServerMessage::Signal {
+                                                    signal: serde_json::to_value(signal).unwrap(),
+                                                };
+                                                let _ = socket
+                                                    .send(Message::Text(
+                                                        serde_json::to_string(&sig_resp).unwrap(),
+                                                    ))
+                                                    .await;
                                             }
 
                                             // Send recent trades
                                             for trade in &snapshot.recent_trades {
-                                                let trade_resp = ServerMessage::Trade { fill: serde_json::to_value(trade).unwrap() };
-                                                let _ = socket.send(Message::Text(serde_json::to_string(&trade_resp).unwrap())).await;
+                                                let trade_resp = ServerMessage::Trade {
+                                                    fill: serde_json::to_value(trade).unwrap(),
+                                                };
+                                                let _ = socket
+                                                    .send(Message::Text(
+                                                        serde_json::to_string(&trade_resp).unwrap(),
+                                                    ))
+                                                    .await;
                                             }
                                         }
                                     }
@@ -107,8 +137,12 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         }
                     }
                     Err(e) => {
-                        let resp = ServerMessage::Error { message: format!("Invalid message: {}", e) };
-                        let _ = socket.send(Message::Text(serde_json::to_string(&resp).unwrap())).await;
+                        let resp = ServerMessage::Error {
+                            message: format!("Invalid message: {}", e),
+                        };
+                        let _ = socket
+                            .send(Message::Text(serde_json::to_string(&resp).unwrap()))
+                            .await;
                     }
                 }
             }

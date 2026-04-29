@@ -1,6 +1,6 @@
-use strategy::*;
 use data_pipeline::StandardBar;
 use rust_decimal::Decimal;
+use strategy::*;
 
 // ------------------------------------------------------------------
 // Helpers
@@ -30,11 +30,22 @@ fn create_bullish_crossover_bars() -> Vec<StandardBar> {
         let open = price;
         price -= Decimal::from(100);
         let close = price;
-        let high = if close > open { close + Decimal::from(10) } else { open + Decimal::from(10) };
-        let low = if close < open { close - Decimal::from(10) } else { open - Decimal::from(10) };
+        let high = if close > open {
+            close + Decimal::from(10)
+        } else {
+            open + Decimal::from(10)
+        };
+        let low = if close < open {
+            close - Decimal::from(10)
+        } else {
+            open - Decimal::from(10)
+        };
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -47,11 +58,22 @@ fn create_bullish_crossover_bars() -> Vec<StandardBar> {
         let open = price;
         price += Decimal::from(200);
         let close = price;
-        let high = if close > open { close + Decimal::from(10) } else { open + Decimal::from(10) };
-        let low = if close < open { close - Decimal::from(10) } else { open - Decimal::from(10) };
+        let high = if close > open {
+            close + Decimal::from(10)
+        } else {
+            open + Decimal::from(10)
+        };
+        let low = if close < open {
+            close - Decimal::from(10)
+        } else {
+            open - Decimal::from(10)
+        };
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -75,11 +97,22 @@ fn create_bearish_crossover_bars() -> Vec<StandardBar> {
         let open = price;
         price += Decimal::from(100);
         let close = price;
-        let high = if close > open { close + Decimal::from(10) } else { open + Decimal::from(10) };
-        let low = if close < open { close - Decimal::from(10) } else { open - Decimal::from(10) };
+        let high = if close > open {
+            close + Decimal::from(10)
+        } else {
+            open + Decimal::from(10)
+        };
+        let low = if close < open {
+            close - Decimal::from(10)
+        } else {
+            open - Decimal::from(10)
+        };
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -92,11 +125,22 @@ fn create_bearish_crossover_bars() -> Vec<StandardBar> {
         let open = price;
         price -= Decimal::from(200);
         let close = price;
-        let high = if close > open { close + Decimal::from(10) } else { open + Decimal::from(10) };
-        let low = if close < open { close - Decimal::from(10) } else { open - Decimal::from(10) };
+        let high = if close > open {
+            close + Decimal::from(10)
+        } else {
+            open + Decimal::from(10)
+        };
+        let low = if close < open {
+            close - Decimal::from(10)
+        } else {
+            open - Decimal::from(10)
+        };
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -123,7 +167,10 @@ fn create_rsi_macd_bullish_bars() -> Vec<StandardBar> {
         let low = open - Decimal::from(20);
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -141,7 +188,10 @@ fn create_rsi_macd_bullish_bars() -> Vec<StandardBar> {
         let low = close - Decimal::from(10);
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -158,7 +208,10 @@ fn create_rsi_macd_bullish_bars() -> Vec<StandardBar> {
         let low = open - Decimal::from(20);
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -185,7 +238,10 @@ fn create_bollinger_bullish_bars() -> Vec<StandardBar> {
         let low = open - Decimal::from(15);
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -203,7 +259,10 @@ fn create_bollinger_bullish_bars() -> Vec<StandardBar> {
         let low = close - Decimal::from(5);
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -220,7 +279,10 @@ fn create_bollinger_bullish_bars() -> Vec<StandardBar> {
         let low = open - Decimal::from(10);
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -257,7 +319,10 @@ fn test_ema_crossover_generates_bullish_signal() {
             }
         }
     }
-    assert!(found_signal, "EmaCrossover should generate bullish signal after downtrend then uptrend");
+    assert!(
+        found_signal,
+        "EmaCrossover should generate bullish signal after downtrend then uptrend"
+    );
 }
 
 #[test]
@@ -282,7 +347,10 @@ fn test_ema_crossover_generates_bearish_signal() {
             }
         }
     }
-    assert!(found_signal, "EmaCrossover should generate bearish signal after uptrend then downtrend");
+    assert!(
+        found_signal,
+        "EmaCrossover should generate bearish signal after uptrend then downtrend"
+    );
 }
 
 #[test]
@@ -300,7 +368,10 @@ fn test_ema_crossover_no_signal_in_trending_market() {
         let low = open - Decimal::from(10);
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -354,7 +425,10 @@ fn test_rsi_macd_generates_oversold_signal() {
             }
         }
     }
-    assert!(found_signal, "RsiMacd should generate OpenLong signal when RSI is oversold and MACD turns bullish");
+    assert!(
+        found_signal,
+        "RsiMacd should generate OpenLong signal when RSI is oversold and MACD turns bullish"
+    );
 }
 
 #[test]
@@ -407,7 +481,10 @@ fn test_bollinger_bands_generates_buy_signal() {
             }
         }
     }
-    assert!(found_signal, "BollingerBands should generate OpenLong when price drops below lower band");
+    assert!(
+        found_signal,
+        "BollingerBands should generate OpenLong when price drops below lower band"
+    );
 }
 
 #[test]

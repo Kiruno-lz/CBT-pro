@@ -1,5 +1,5 @@
+use crate::{OrderFill, OrderRequest, OrderSide, OrderType, StandardBar};
 use rust_decimal::Decimal;
-use crate::{StandardBar, OrderRequest, OrderFill, OrderType, OrderSide};
 
 /// Simulates order execution against a [`BarSnapshot`].
 ///
@@ -210,7 +210,11 @@ mod tests {
     #[test]
     fn test_stop_market_buy_triggered() {
         let bar = make_bar(dec!(39500), dec!(40500), dec!(40000));
-        let req = make_req(OrderSide::Buy, OrderType::StopMarket(dec!(40200)), dec!(0.5));
+        let req = make_req(
+            OrderSide::Buy,
+            OrderType::StopMarket(dec!(40200)),
+            dec!(0.5),
+        );
         let fill = OrderSimulator::simulate_stop_market(&req, &bar, dec!(0.001));
         assert!(fill.is_some());
         let fill = fill.unwrap();
@@ -220,7 +224,11 @@ mod tests {
     #[test]
     fn test_stop_market_buy_not_triggered() {
         let bar = make_bar(dec!(39500), dec!(39900), dec!(39800));
-        let req = make_req(OrderSide::Buy, OrderType::StopMarket(dec!(40200)), dec!(0.5));
+        let req = make_req(
+            OrderSide::Buy,
+            OrderType::StopMarket(dec!(40200)),
+            dec!(0.5),
+        );
         let fill = OrderSimulator::simulate_stop_market(&req, &bar, dec!(0.001));
         assert!(fill.is_none());
     }

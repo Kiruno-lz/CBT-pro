@@ -1,15 +1,15 @@
-pub mod position;
-pub mod order;
 pub mod margin;
+pub mod order;
+pub mod position;
 
-pub use position::{InMemoryOrderBook, OrderBookManager};
-pub use order::OrderSimulator;
 pub use margin::MarginCalculator;
+pub use order::OrderSimulator;
+pub use position::{InMemoryOrderBook, OrderBookManager};
 
+pub use data_pipeline::StandardBar;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-pub use data_pipeline::StandardBar;
 use uuid::Uuid;
 
 pub type PositionId = Uuid;
@@ -94,7 +94,6 @@ pub struct PositionBook {
     pub unrealized_pnl: Decimal,
 }
 
-
 /// Request to create a new order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderRequest {
@@ -142,5 +141,8 @@ pub enum OrderBookError {
     #[error("Invalid order: {0}")]
     InvalidOrder(String),
     #[error("Margin call: required {required}, available {available}")]
-    MarginCall { required: Decimal, available: Decimal },
+    MarginCall {
+        required: Decimal,
+        available: Decimal,
+    },
 }

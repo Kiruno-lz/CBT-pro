@@ -1,7 +1,5 @@
 use crate::{error::DataError, StandardBar, TimeFrame};
-use arrow::array::{
-    BooleanArray, Int64Array, StringArray,
-};
+use arrow::array::{BooleanArray, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use chrono::{Datelike, TimeZone, Utc};
@@ -314,12 +312,12 @@ impl ParquetStorage {
             std::collections::HashMap::new();
 
         for bar in bars {
-            let dt = Utc.timestamp_opt(bar.timestamp, 0).single().ok_or_else(|| {
-                DataError::Storage(format!(
-                    "invalid timestamp {} for bar",
-                    bar.timestamp
-                ))
-            })?;
+            let dt = Utc
+                .timestamp_opt(bar.timestamp, 0)
+                .single()
+                .ok_or_else(|| {
+                    DataError::Storage(format!("invalid timestamp {} for bar", bar.timestamp))
+                })?;
             let key = (
                 bar.symbol.clone(),
                 bar.exchange.clone(),
@@ -336,33 +334,52 @@ impl ParquetStorage {
             }
 
             // Build Arrow arrays
-            let timestamps = Int64Array::from(
-                group_bars.iter().map(|b| b.timestamp).collect::<Vec<_>>(),
-            );
+            let timestamps =
+                Int64Array::from(group_bars.iter().map(|b| b.timestamp).collect::<Vec<_>>());
             let opens = StringArray::from(
-                group_bars.iter().map(|b| b.open.to_string()).collect::<Vec<_>>(),
+                group_bars
+                    .iter()
+                    .map(|b| b.open.to_string())
+                    .collect::<Vec<_>>(),
             );
             let highs = StringArray::from(
-                group_bars.iter().map(|b| b.high.to_string()).collect::<Vec<_>>(),
+                group_bars
+                    .iter()
+                    .map(|b| b.high.to_string())
+                    .collect::<Vec<_>>(),
             );
             let lows = StringArray::from(
-                group_bars.iter().map(|b| b.low.to_string()).collect::<Vec<_>>(),
+                group_bars
+                    .iter()
+                    .map(|b| b.low.to_string())
+                    .collect::<Vec<_>>(),
             );
             let closes = StringArray::from(
-                group_bars.iter().map(|b| b.close.to_string()).collect::<Vec<_>>(),
+                group_bars
+                    .iter()
+                    .map(|b| b.close.to_string())
+                    .collect::<Vec<_>>(),
             );
             let volumes = StringArray::from(
-                group_bars.iter().map(|b| b.volume.to_string()).collect::<Vec<_>>(),
+                group_bars
+                    .iter()
+                    .map(|b| b.volume.to_string())
+                    .collect::<Vec<_>>(),
             );
             let symbols = StringArray::from(
-                group_bars.iter().map(|b| b.symbol.as_str()).collect::<Vec<_>>(),
+                group_bars
+                    .iter()
+                    .map(|b| b.symbol.as_str())
+                    .collect::<Vec<_>>(),
             );
             let exchanges = StringArray::from(
-                group_bars.iter().map(|b| b.exchange.as_str()).collect::<Vec<_>>(),
+                group_bars
+                    .iter()
+                    .map(|b| b.exchange.as_str())
+                    .collect::<Vec<_>>(),
             );
-            let confirmeds = BooleanArray::from(
-                group_bars.iter().map(|b| b.confirmed).collect::<Vec<_>>(),
-            );
+            let confirmeds =
+                BooleanArray::from(group_bars.iter().map(|b| b.confirmed).collect::<Vec<_>>());
 
             let schema = Arc::new(Schema::new(vec![
                 Field::new("timestamp", DataType::Int64, false),
@@ -541,9 +558,30 @@ mod tests {
         let storage = ParquetStorage::new(dir.path().to_str().unwrap());
 
         let bars = vec![
-            make_bar(1704067200, "42000.50", "42100.00", "41900.00", "42050.00", "123.45678901"),
-            make_bar(1704067260, "42050.00", "42200.00", "42000.00", "42150.00", "200.00000000"),
-            make_bar(1704067320, "42150.00", "42300.00", "42100.00", "42250.00", "50.12345678"),
+            make_bar(
+                1704067200,
+                "42000.50",
+                "42100.00",
+                "41900.00",
+                "42050.00",
+                "123.45678901",
+            ),
+            make_bar(
+                1704067260,
+                "42050.00",
+                "42200.00",
+                "42000.00",
+                "42150.00",
+                "200.00000000",
+            ),
+            make_bar(
+                1704067320,
+                "42150.00",
+                "42300.00",
+                "42100.00",
+                "42250.00",
+                "50.12345678",
+            ),
         ];
 
         storage.write_bars(&bars).unwrap();
@@ -570,7 +608,9 @@ mod tests {
         let path = storage.get_partition_path("BTC-USDT", "binance", 2024, 1);
         assert_eq!(
             path,
-            std::path::PathBuf::from("/tmp/cbt/data/parquet/binance/BTC-USDT/2024/01/BTC-USDT_20240101.parquet")
+            std::path::PathBuf::from(
+                "/tmp/cbt/data/parquet/binance/BTC-USDT/2024/01/BTC-USDT_20240101.parquet"
+            )
         );
     }
 }

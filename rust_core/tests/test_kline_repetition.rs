@@ -1,5 +1,5 @@
-use data_pipeline::{StandardBar, TimeFrame};
 use data_pipeline::exchange::{BinanceAdapter, ExchangeAdapter, OkxAdapter};
+use data_pipeline::{StandardBar, TimeFrame};
 use rust_decimal::Decimal;
 
 // ===========================================================================
@@ -127,27 +127,32 @@ fn validate_ohlcv(bars: &[StandardBar]) -> Vec<String> {
     for (i, bar) in bars.iter().enumerate() {
         if bar.high < bar.open {
             errors.push(format!(
-                "Bar {}: high ({}) < open ({})", i, bar.high, bar.open
+                "Bar {}: high ({}) < open ({})",
+                i, bar.high, bar.open
             ));
         }
         if bar.high < bar.close {
             errors.push(format!(
-                "Bar {}: high ({}) < close ({})", i, bar.high, bar.close
+                "Bar {}: high ({}) < close ({})",
+                i, bar.high, bar.close
             ));
         }
         if bar.low > bar.open {
             errors.push(format!(
-                "Bar {}: low ({}) > open ({})", i, bar.low, bar.open
+                "Bar {}: low ({}) > open ({})",
+                i, bar.low, bar.open
             ));
         }
         if bar.low > bar.close {
             errors.push(format!(
-                "Bar {}: low ({}) > close ({})", i, bar.low, bar.close
+                "Bar {}: low ({}) > close ({})",
+                i, bar.low, bar.close
             ));
         }
         if bar.high < bar.low {
             errors.push(format!(
-                "Bar {}: high ({}) < low ({})", i, bar.high, bar.low
+                "Bar {}: high ({}) < low ({})",
+                i, bar.high, bar.low
             ));
         }
     }

@@ -5,21 +5,18 @@
 pub mod server;
 pub mod websocket;
 
-use std::net::SocketAddr;
+use axum::serve;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use axum::serve;
 use tracing::info;
 
 pub use server::create_rest_router;
 pub use server::AppState;
 
 /// Run both REST and WebSocket servers.
-pub async fn run_api(
-    rest_addr: SocketAddr,
-    ws_addr: SocketAddr,
-) -> Result<(), ApiError> {
+pub async fn run_api(rest_addr: SocketAddr, ws_addr: SocketAddr) -> Result<(), ApiError> {
     let state: AppState = Arc::new(Mutex::new(HashMap::new()));
 
     // REST server
