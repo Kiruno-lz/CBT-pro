@@ -13,11 +13,34 @@ interface BacktestConfigForm {
   strategy: string;
 }
 
+function getDefaultDates() {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const sixMonthsAgo = new Date(yesterday);
+  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+  const formatDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  return {
+    startDate: formatDate(sixMonthsAgo),
+    endDate: formatDate(yesterday),
+  };
+}
+
+const defaultDates = getDefaultDates();
+
 const DEFAULT_FORM: BacktestConfigForm = {
   symbol: 'BTCUSDT',
   timeframe: 'H1',
-  startDate: '2024-01-01',
-  endDate: '2024-12-31',
+  startDate: defaultDates.startDate,
+  endDate: defaultDates.endDate,
   initialBalance: '10000',
   leverage: '10',
   strategy: 'ema_cross',
@@ -60,6 +83,16 @@ const STRATEGY_TO_INDICATORS: Record<string, IndicatorConfig[]> = {
   always_long: [],
 };
 
+const ALL_INDICATORS: IndicatorConfig[] = [
+  { name: 'ema_9', params: { period: 9 }, visible: false, panel: 'main' },
+  { name: 'ema_21', params: { period: 21 }, visible: false, panel: 'main' },
+  { name: 'rsi_14', params: { period: 14 }, visible: false, panel: 'sub' },
+  { name: 'macd_12_26_9', params: { fast: 12, slow: 26, signal: 9 }, visible: false, panel: 'sub' },
+  { name: 'bollinger_20_2', params: { period: 20, stdDev: 2 }, visible: false, panel: 'main' },
+  { name: 'atr_14', params: { period: 14 }, visible: false, panel: 'sub' },
+  { name: 'vwap', params: {}, visible: false, panel: 'main' },
+];
+
 function dateToTimestamp(dateStr: string): number {
   return new Date(dateStr).getTime();
 }
@@ -79,78 +112,76 @@ function getParamType(def: ParamDefinition): string {
 
 function generateIndicatorsFromParams(
   strategyId: string,
-  params: Record<string, string | number>,
-  existingIndicators: IndicatorConfig[]
+  params: Record<string, string | number>
 ): IndicatorConfig[] {
-  const indicators = [...existingIndicators];
-  const indicatorNames = new Set(indicators.map((ind) => ind.name));
+  // Start with all default indicators (all hidden by default)
+  const indicators = ALL_INDICATORS.map((ind) => ({ ...ind }));
 
-  // EMA strategies
+  // Generate active indicators based on CURRENT parameters
+  const activeIndicators: IndicatorConfig[] = [];
+
   if (strategyId === 'ema_crossover') {
     for (const [key, value] of Object.entries(params)) {
       if (key.includes('period') && typeof value === 'number') {
-        const name = `ema_${value}`;
-        if (!indicatorNames.has(name)) {
-          indicators.push({
-            name,
-            params: { period: value },
-            visible: false,
-            panel: 'main',
-          });
-          indicatorNames.add(name);
-        }
+        activeIndicators.push({
+          name: `ema_${value}`,
+          params: { period: value },
+          visible: true,
+          panel: 'main',
+        });
       }
     }
   }
 
-  // RSI + MACD
   if (strategyId === 'rsi_macd') {
     for (const [key, value] of Object.entries(params)) {
       if (key.includes('rsi') && key.includes('period') && typeof value === 'number') {
-        const name = `rsi_${value}`;
-        if (!indicatorNames.has(name)) {
-          indicators.push({
-            name,
-            params: { period: value },
-            visible: false,
-            panel: 'sub',
-          });
-          indicatorNames.add(name);
-        }
-      }
-    }
-
-    // MACD requires all three params
-    const fast = params.macd_fast ?? params.fast;
-    const slow = params.macd_slow ?? params.slow;
-    const signal = params.macd_signal ?? params.signal;
-    if (typeof fast === 'number' && typeof slow === 'number' && typeof signal === 'number') {
-      const name = `macd_${fast}_${slow}_${signal}`;
-      if (!indicatorNames.has(name)) {
-        indicators.push({
-          name,
-          params: { fast, slow, signal },
-          visible: false,
+        activeIndicators.push({
+          name: `rsi_${value}`,
+          params: { period: value },
+          visible: true,
           panel: 'sub',
         });
       }
     }
+
+    const fast = params.macd_fast ?? params.fast;
+    const slow = params.macd_slow ?? params.slow;
+    const signal = params.macd_signal ?? params.signal;
+    if (typeof fast === 'number' && typeof slow === 'number' && typeof signal === 'number') {
+      activeIndicators.push({
+        name: `macd_${fast}_${slow}_${signal}`,
+        params: { fast, slow, signal },
+        visible: true,
+        panel: 'sub',
+      });
+    }
   }
 
-  // Bollinger Bands
   if (strategyId === 'bollinger_bands') {
-    const period = params.period ?? params.bollinger_period;
-    const stdDev = params.std_dev ?? params.stdDev ?? params.bollinger_std_dev;
-    if (typeof period === 'number' && typeof stdDev === 'number') {
-      const name = `bollinger_${period}_${stdDev}`;
-      if (!indicatorNames.has(name)) {
-        indicators.push({
-          name,
-          params: { period, stdDev },
-          visible: false,
-          panel: 'main',
-        });
-      }
+    const period = Number(params.period ?? params.bollinger_period);
+    const stdDev = Number(params.std_dev ?? params.stdDev ?? params.bollinger_std_dev);
+    console.log('generateIndicatorsFromParams bollinger - period:', period, 'stdDev:', stdDev, 'types:', typeof period, typeof stdDev);
+    if (!isNaN(period) && !isNaN(stdDev)) {
+      activeIndicators.push({
+        name: `bollinger_${period}_${stdDev}`,
+        params: { period, stdDev },
+        visible: true,
+        panel: 'main',
+      });
+      console.log('Added active indicator:', `bollinger_${period}_${stdDev}`);
+    } else {
+      console.log('Failed to add bollinger indicator - invalid number');
+    }
+  }
+
+  // Apply active indicators - activate matching ones, keep others inactive
+  for (const active of activeIndicators) {
+    const existing = indicators.find((ind) => ind.name === active.name);
+    if (existing) {
+      existing.visible = true;
+    } else {
+      indicators.push(active);
     }
   }
 
@@ -193,14 +224,19 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
         }
         setStrategyParams(defaults);
         setCurrentStrategy(data);
+        
+        // Generate indicators from default params
+        console.log('Initial load - defaults:', defaults);
+        const defaultIndicators = generateIndicatorsFromParams(strategyId, defaults);
+        console.log('Initial load - defaultIndicators:', defaultIndicators.map(i => ({ name: i.name, visible: i.visible })));
+        setIndicators(defaultIndicators);
       })
       .catch(() => {
         setStrategyDefaults(null);
         setStrategyParams({});
+        setIndicators(ALL_INDICATORS.map(ind => ({ ...ind })));
       });
-
-    setIndicators(STRATEGY_TO_INDICATORS[strategyId] || []);
-  }, [form.strategy, setIndicators]);
+  }, [form.strategy, setIndicators, setCurrentStrategy]);
 
   const handleChange = (field: keyof BacktestConfigForm, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -208,7 +244,12 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
   };
 
   const handleParamChange = (name: string, value: string | number) => {
-    setStrategyParams((prev) => ({ ...prev, [name]: value }));
+    console.log('handleParamChange:', name, value);
+    setStrategyParams((prev) => {
+      const updated = { ...prev, [name]: value };
+      console.log('strategyParams updated:', updated);
+      return updated;
+    });
   };
 
   useEffect(() => {
@@ -217,12 +258,22 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
     const strategyId = STRATEGY_ID_MAP[form.strategy];
     if (!strategyId) return;
 
+    console.log('generateIndicatorsFromParams called with:', strategyId, strategyParams);
+    const newIndicators = generateIndicatorsFromParams(strategyId, strategyParams);
+    console.log('newIndicators:', newIndicators.map(i => ({ name: i.name, visible: i.visible })));
     const currentIndicators = useAppStore.getState().indicators;
-    const updatedIndicators = generateIndicatorsFromParams(strategyId, strategyParams, currentIndicators);
 
-    // Only update if new indicators were added
-    if (updatedIndicators.length > currentIndicators.length) {
-      setIndicators(updatedIndicators);
+    // Only update if the arrays are actually different
+    const currentNames = currentIndicators.map(i => i.name).join(',');
+    const newNames = newIndicators.map(i => i.name).join(',');
+    console.log('currentNames:', currentNames);
+    console.log('newNames:', newNames);
+
+    if (currentNames !== newNames) {
+      console.log('Updating indicators');
+      setIndicators(newIndicators);
+    } else {
+      console.log('Indicators unchanged, skipping update');
     }
   }, [strategyParams, strategyDefaults, form.strategy, setIndicators]);
 

@@ -1000,6 +1000,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_indicators_bollinger_15_2() {
+        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let query = IndicatorQuery {
+            symbol: "BTC-USDT".to_string(),
+            timeframe: "1m".to_string(),
+            indicators: "bollinger_15_2".to_string(),
+            backtest_id: None,
+            full: None,
+        };
+
+        let result = get_indicators(State(state), Query(query)).await;
+        assert!(result.is_ok(), "get_indicators with bollinger_15_2 should succeed");
+
+        let json = match result {
+            Ok(Json(v)) => v,
+            Err(_) => panic!("Expected Ok result"),
+        };
+        let obj = json.as_object().expect("Response should be a JSON object");
+
+        // Verify bollinger_15_2 is present and has real values
+        assert!(obj.contains_key("bollinger_15_2"), "Response should contain bollinger_15_2");
+        assert!(!obj["bollinger_15_2"].is_null(), "bollinger_15_2 should have a real calculated value");
+        
+        // Verify it has the expected Bollinger Bands fields
+        let bb_value = &obj["bollinger_15_2"];
+        assert!(bb_value.get("upper").is_some(), "bollinger_15_2 should have upper field");
+        assert!(bb_value.get("middle").is_some(), "bollinger_15_2 should have middle field");
+        assert!(bb_value.get("lower").is_some(), "bollinger_15_2 should have lower field");
+    }
+
+    #[tokio::test]
     async fn test_get_indicators_backtest_progress_limiting() {
         let state: AppState = Arc::new(Mutex::new(HashMap::new()));
         let payload = serde_json::json!({
@@ -1117,6 +1148,10 @@ mod tests {
         let expected_2_5 = Decimal::from_str("2.5").unwrap();
         assert!(matches!(bb2, IndicatorType::Bollinger(15, d) if d == expected_2_5));
 
+        // Test bollinger_15_2 specifically (integer stdDev)
+        let bb3 = parse_indicator_name("bollinger_15_2").unwrap();
+        assert!(matches!(bb3, IndicatorType::Bollinger(15, d) if d == Decimal::from(2)));
+
         // ATR
         let atr = parse_indicator_name("atr_14").unwrap();
         assert!(matches!(atr, IndicatorType::Atr(14)));
@@ -1132,6 +1167,23 @@ mod tests {
         assert!(parse_indicator_name("unknown").is_err());
         assert!(parse_indicator_name("ema").is_err());
         assert!(parse_indicator_name("rsi").is_err());
+    }
+
+    #[test]
+    fn test_bollinger_15_2_calculation() {
+        let bars = generate_synthetic_bars("BTC-USDT", 200, TimeFrame::M1);
+        let closes: Vec<Decimal> = bars.iter().map(|b| b.close).collect();
+        let highs: Vec<Decimal> = bars.iter().map(|b| b.high).collect();
+        let lows: Vec<Decimal> = bars.iter().map(|b| b.low).collect();
+        let volumes: Vec<Decimal> = bars.iter().map(|b| b.volume).collect();
+        
+        // Test series calculation
+        let result = calculate_indicator_series("bollinger_15_2", &closes, &highs, &lows, &volumes, &bars);
+        assert!(result.is_ok(), "bollinger_15_2 series calculation failed: {:?}", result.err());
+        
+        // Test last value calculation
+        let result = calculate_indicator_last("bollinger_15_2", &closes, &highs, &lows, &volumes);
+        assert!(result.is_ok(), "bollinger_15_2 last value calculation failed: {:?}", result.err());
     }
 
     // ------------------------------------------------------------------

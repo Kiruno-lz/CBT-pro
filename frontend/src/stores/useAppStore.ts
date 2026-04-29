@@ -133,7 +133,11 @@ export const useAppStore = create<AppState & AppActions>((set) => ({
       tradeHistory: [trade, ...state.tradeHistory],
     })),
   setTradeHistory: (trades) => set({ tradeHistory: trades }),
-  setIndicators: (indicators) => set({ indicators }),
+  setIndicators: (indicators) => {
+    console.log('setIndicators called with:', indicators.map(i => ({ name: i.name, visible: i.visible })));
+    set({ indicators });
+    console.log('setIndicators - store updated');
+  },
   updateIndicator: (name, patch) =>
     set((state) => ({
       indicators: state.indicators.map((ind) =>

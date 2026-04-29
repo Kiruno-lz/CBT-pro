@@ -10,7 +10,7 @@ import {
   type SeriesMarkerPosition,
 } from 'lightweight-charts';
 import { useAppStore } from '../../stores/useAppStore';
-import type { StandardBar, IndicatorValue, IndicatorConfig } from '../../types';
+import type { StandardBar, IndicatorValue } from '../../types';
 
 interface IndicatorData {
   values: IndicatorValue[];
@@ -27,7 +27,29 @@ const INDICATOR_DISPLAY_NAMES: Record<string, string> = {
   vwap: 'VWAP',
 };
 
-const INDICATOR_COLORS: Record<string, string> = {
+function getIndicatorDisplayName(name: string): string {
+  if (INDICATOR_DISPLAY_NAMES[name]) {
+    return INDICATOR_DISPLAY_NAMES[name];
+  }
+
+  const parts = name.split('_');
+
+  if (parts[0] === 'macd') {
+    return `MACD ${parts.slice(1).join('/')}`;
+  }
+
+  if (parts[0] === 'bollinger') {
+    return `Bollinger ${parts.slice(1).join('/')}`;
+  }
+
+  if (parts[0] === 'ema' || parts[0] === 'rsi' || parts[0] === 'atr') {
+    return `${parts[0].toUpperCase()} ${parts[1]}`;
+  }
+
+  return name.toUpperCase();
+}
+
+const PREDEFINED_COLORS: Record<string, string> = {
   ema_9: '#f59e0b',
   ema_21: '#8b5cf6',
   rsi_14: '#10b981',
@@ -35,15 +57,25 @@ const INDICATOR_COLORS: Record<string, string> = {
   vwap: '#06b6d4',
 };
 
-const ALL_INDICATORS: IndicatorConfig[] = [
-  { name: 'ema_9', params: { period: 9 }, visible: false, panel: 'main' },
-  { name: 'ema_21', params: { period: 21 }, visible: false, panel: 'main' },
-  { name: 'rsi_14', params: { period: 14 }, visible: false, panel: 'sub' },
-  { name: 'macd_12_26_9', params: { fast: 12, slow: 26, signal: 9 }, visible: false, panel: 'sub' },
-  { name: 'bollinger_20_2', params: { period: 20, stdDev: 2 }, visible: false, panel: 'main' },
-  { name: 'atr_14', params: { period: 14 }, visible: false, panel: 'sub' },
-  { name: 'vwap', params: {}, visible: false, panel: 'main' },
+const COLOR_PALETTE = [
+  '#f59e0b', '#8b5cf6', '#10b981', '#ef4444', '#06b6d4',
+  '#ec4899', '#f97316', '#84cc16', '#14b8a6', '#6366f1',
+  '#a855f7', '#d946ef', '#f43f5e', '#eab308', '#22c55e',
 ];
+
+function getIndicatorColor(name: string): string {
+  if (PREDEFINED_COLORS[name]) {
+    return PREDEFINED_COLORS[name];
+  }
+
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+
+  const index = Math.abs(hash) % COLOR_PALETTE.length;
+  return COLOR_PALETTE[index];
+}
 
 export function KLineChart() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -56,7 +88,7 @@ export function KLineChart() {
 
   const [indicatorData, setIndicatorData] = useState<Map<string, IndicatorData>>(new Map());
 
-  const { bars, snapshot, indicators, backtestId, chartTimeframe, updateIndicator, currentStrategy, setIndicators } = useAppStore();
+  const { bars, snapshot, indicators, backtestId, chartTimeframe, updateIndicator } = useAppStore();
 
   const formatBarToCandle = useCallback((bar: StandardBar): CandlestickData<Time> => {
     return {
@@ -95,12 +127,14 @@ export function KLineChart() {
     if (!backtestId || bars.length === 0) return;
 
     const visibleIndicators = indicators.filter((ind) => ind.visible);
+    console.log('fetchIndicators - visibleIndicators:', visibleIndicators.map(i => ({ name: i.name, params: i.params })));
     if (visibleIndicators.length === 0) {
       setIndicatorData(new Map());
       return;
     }
 
     const indicatorNames = visibleIndicators.map((ind) => ind.name).join(',');
+    console.log('fetchIndicators - requesting:', indicatorNames);
     const symbol = snapshot?.current_bar?.symbol || bars[0]?.symbol || '';
 
     try {
@@ -252,24 +286,6 @@ export function KLineChart() {
     }
   }, [bars.length, backtestId, fetchIndicators]);
 
-  // Sync indicators with current strategy defaults
-  useEffect(() => {
-    if (!currentStrategy) return;
-
-    const defaultIndicatorNames = new Set(
-      Object.keys(currentStrategy.default_params).filter((name) =>
-        ALL_INDICATORS.some((ind) => ind.name === name)
-      )
-    );
-
-    const updatedIndicators = ALL_INDICATORS.map((ind) => ({
-      ...ind,
-      visible: defaultIndicatorNames.has(ind.name),
-    }));
-
-    setIndicators(updatedIndicators);
-  }, [currentStrategy, setIndicators]);
-
   useEffect(() => {
     if (!chartRef.current) return;
 
@@ -278,7 +294,7 @@ export function KLineChart() {
     indicatorData.forEach((data, name) => {
       if (!chartRef.current) return;
 
-      if (name === 'bollinger_20_2') {
+      if (name.startsWith('bollinger_')) {
         const upperSeries = chartRef.current.addLineSeries({
           color: 'rgba(236, 72, 153, 0.6)',
           lineStyle: 2,
@@ -320,7 +336,7 @@ export function KLineChart() {
           }))
         );
         indicatorSeriesRef.current.set('bollinger_20_2_lower', lowerSeries);
-      } else if (name === 'macd_12_26_9') {
+      } else if (name.startsWith('macd_')) {
         const macdSeries = chartRef.current.addLineSeries({
           color: '#3b82f6',
           priceScaleId: 'sub',
@@ -359,7 +375,7 @@ export function KLineChart() {
         );
         indicatorHistogramRef.current.set('macd_12_26_9_histogram', histogramSeries);
       } else {
-        const color = INDICATOR_COLORS[name] || '#9ca3af';
+        const color = getIndicatorColor(name);
         const priceScaleId = data.panel === 'main' ? 'right' : 'sub';
 
         const series = chartRef.current.addLineSeries({
@@ -415,11 +431,11 @@ export function KLineChart() {
                 }`}
                 style={
                   indicator.visible
-                    ? { borderLeftColor: INDICATOR_COLORS[indicator.name] || '#9ca3af' }
+                    ? { borderLeftColor: getIndicatorColor(indicator.name) }
                     : undefined
                 }
               >
-                {INDICATOR_DISPLAY_NAMES[indicator.name] || indicator.name}
+                {getIndicatorDisplayName(indicator.name)}
               </button>
             ))}
           </div>
