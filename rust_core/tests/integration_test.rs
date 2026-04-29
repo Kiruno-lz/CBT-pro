@@ -1,8 +1,8 @@
 use data_pipeline::StandardBar;
 use engine::{BacktestEngine, EngineConfig, EngineSnapshot};
-use strategy::{Signal, SignalAction};
 use orderbook::{CostBasisMethod, MarginMode};
 use rust_decimal::Decimal;
+use strategy::{Signal, SignalAction};
 
 /// Create 100 synthetic bars: trending up for first 50, then trending down.
 fn generate_synthetic_bars() -> Vec<StandardBar> {
@@ -84,7 +84,9 @@ fn test_full_backtest_pipeline() {
         take_profit: None,
     });
 
-    let result = engine.run().expect("Backtest should complete without error");
+    let result = engine
+        .run()
+        .expect("Backtest should complete without error");
 
     // 1. Final equity must be positive
     assert!(

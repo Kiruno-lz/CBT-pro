@@ -127,10 +127,7 @@ mod tests {
     #[test]
     fn test_aggregate_m1_to_m5() {
         let bars: Vec<StandardBar> = (0..5)
-            .map(|i| make_bar(
-                i * 60,
-                "100.0", "105.0", "95.0", "102.0", "1.0",
-            ))
+            .map(|i| make_bar(i * 60, "100.0", "105.0", "95.0", "102.0", "1.0"))
             .collect();
 
         let agg = BarBuilder::from_1m_bars(bars, TimeFrame::M5);
@@ -147,10 +144,7 @@ mod tests {
     #[test]
     fn test_aggregate_m1_to_h1() {
         let bars: Vec<StandardBar> = (0..60)
-            .map(|i| make_bar(
-                i * 60,
-                "100.0", "105.0", "95.0", "102.0", "1.0",
-            ))
+            .map(|i| make_bar(i * 60, "100.0", "105.0", "95.0", "102.0", "1.0"))
             .collect();
 
         let agg = BarBuilder::from_1m_bars(bars, TimeFrame::H1);
@@ -167,10 +161,16 @@ mod tests {
     #[test]
     fn test_decimal_precision() {
         let bars: Vec<StandardBar> = (0..3)
-            .map(|i| make_bar(
-                i * 60,
-                "100.12345678", "101.23456789", "99.87654321", "100.50000000", "0.33333333",
-            ))
+            .map(|i| {
+                make_bar(
+                    i * 60,
+                    "100.12345678",
+                    "101.23456789",
+                    "99.87654321",
+                    "100.50000000",
+                    "0.33333333",
+                )
+            })
             .collect();
 
         let agg = BarBuilder::from_1m_bars(bars, TimeFrame::M5);

@@ -1,9 +1,9 @@
 use crate::{error::DataError, StandardBar, TimeFrame};
+use rand::rngs::SmallRng;
+use rand::Rng;
+use rand::SeedableRng;
 use rust_decimal::Decimal;
 use tracing::{debug, info};
-use rand::rngs::SmallRng;
-use rand::SeedableRng;
-use rand::Rng;
 
 /// Abstraction over a cryptocurrency exchange data feed.
 #[async_trait::async_trait]
@@ -44,7 +44,13 @@ impl ExchangeAdapter for BinanceAdapter {
         start: i64,
         end: i64,
     ) -> Result<Vec<StandardBar>, DataError> {
-        debug!(symbol, ?timeframe, start, end, "BinanceAdapter::fetch_historical_bars");
+        debug!(
+            symbol,
+            ?timeframe,
+            start,
+            end,
+            "BinanceAdapter::fetch_historical_bars"
+        );
 
         let tf_secs = timeframe.as_seconds();
         let count = ((end - start) / tf_secs).max(0) as usize;
@@ -82,7 +88,10 @@ impl ExchangeAdapter for BinanceAdapter {
             price = close;
         }
 
-        info!(count = bars.len(), "BinanceAdapter generated synthetic bars");
+        info!(
+            count = bars.len(),
+            "BinanceAdapter generated synthetic bars"
+        );
         Ok(bars)
     }
 
@@ -118,7 +127,13 @@ impl ExchangeAdapter for OkxAdapter {
         start: i64,
         end: i64,
     ) -> Result<Vec<StandardBar>, DataError> {
-        debug!(symbol, ?timeframe, start, end, "OkxAdapter::fetch_historical_bars");
+        debug!(
+            symbol,
+            ?timeframe,
+            start,
+            end,
+            "OkxAdapter::fetch_historical_bars"
+        );
 
         let tf_secs = timeframe.as_seconds();
         let count = ((end - start) / tf_secs).max(0) as usize;

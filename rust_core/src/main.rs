@@ -1,5 +1,5 @@
-use std::net::SocketAddr;
 use api::run_api;
+use std::net::SocketAddr;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]

@@ -1,4 +1,4 @@
-use orderbook::{MarginMode, CostBasisMethod};
+use orderbook::{CostBasisMethod, MarginMode};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
@@ -27,8 +27,8 @@ impl Default for EngineConfig {
             initial_balance: Decimal::from(100000),
             margin_mode: MarginMode::Cross,
             default_leverage: Decimal::from(10),
-            maker_fee_rate: Decimal::new(1, 3), // 0.001
-            taker_fee_rate: Decimal::new(5, 3), // 0.005
+            maker_fee_rate: Decimal::new(1, 3),          // 0.001
+            taker_fee_rate: Decimal::new(5, 3),          // 0.005
             maintenance_margin_rate: Decimal::new(5, 3), // 0.005
             funding_interval_hours: 8,
             cost_basis_method: CostBasisMethod::FIFO,

@@ -1,6 +1,6 @@
-use strategy::*;
 use data_pipeline::StandardBar;
 use rust_decimal::Decimal;
+use strategy::*;
 
 // ------------------------------------------------------------------
 // Helpers
@@ -72,11 +72,22 @@ fn create_three_phase_bars() -> Vec<StandardBar> {
         let open = price;
         price -= Decimal::from(100);
         let close = price;
-        let high = if close > open { close + Decimal::from(10) } else { open + Decimal::from(10) };
-        let low = if close < open { close - Decimal::from(10) } else { open - Decimal::from(10) };
+        let high = if close > open {
+            close + Decimal::from(10)
+        } else {
+            open + Decimal::from(10)
+        };
+        let low = if close < open {
+            close - Decimal::from(10)
+        } else {
+            open - Decimal::from(10)
+        };
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -89,11 +100,22 @@ fn create_three_phase_bars() -> Vec<StandardBar> {
         let open = price;
         price += Decimal::from(100);
         let close = price;
-        let high = if close > open { close + Decimal::from(10) } else { open + Decimal::from(10) };
-        let low = if close < open { close - Decimal::from(10) } else { open - Decimal::from(10) };
+        let high = if close > open {
+            close + Decimal::from(10)
+        } else {
+            open + Decimal::from(10)
+        };
+        let low = if close < open {
+            close - Decimal::from(10)
+        } else {
+            open - Decimal::from(10)
+        };
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -106,11 +128,22 @@ fn create_three_phase_bars() -> Vec<StandardBar> {
         let open = price;
         price -= Decimal::from(100);
         let close = price;
-        let high = if close > open { close + Decimal::from(10) } else { open + Decimal::from(10) };
-        let low = if close < open { close - Decimal::from(10) } else { open - Decimal::from(10) };
+        let high = if close > open {
+            close + Decimal::from(10)
+        } else {
+            open + Decimal::from(10)
+        };
+        let low = if close < open {
+            close - Decimal::from(10)
+        } else {
+            open - Decimal::from(10)
+        };
         bars.push(StandardBar {
             timestamp: 1704067200 + i as i64 * 3600,
-            open, high, low, close,
+            open,
+            high,
+            low,
+            close,
             volume: Decimal::from(100),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -132,8 +165,16 @@ fn test_always_long_emits_signal_once() {
     let ctx = make_context(&bars, 0);
 
     let signals = strategy.on_bar(&ctx);
-    assert_eq!(signals.len(), 1, "AlwaysLong should emit exactly one signal on first call");
-    assert_eq!(signals[0].action, SignalAction::OpenLong, "Signal should be OpenLong");
+    assert_eq!(
+        signals.len(),
+        1,
+        "AlwaysLong should emit exactly one signal on first call"
+    );
+    assert_eq!(
+        signals[0].action,
+        SignalAction::OpenLong,
+        "Signal should be OpenLong"
+    );
 }
 
 #[test]
@@ -146,7 +187,10 @@ fn test_always_long_no_second_signal() {
 
     let ctx2 = make_context(&bars, 1);
     let signals = strategy.on_bar(&ctx2);
-    assert!(signals.is_empty(), "After first signal, AlwaysLong should return empty vec");
+    assert!(
+        signals.is_empty(),
+        "After first signal, AlwaysLong should return empty vec"
+    );
 }
 
 #[test]
@@ -159,9 +203,17 @@ fn test_always_long_signal_fields() {
     assert_eq!(signals.len(), 1);
     let sig = &signals[0];
 
-    assert_eq!(sig.action, SignalAction::OpenLong, "action should be OpenLong");
+    assert_eq!(
+        sig.action,
+        SignalAction::OpenLong,
+        "action should be OpenLong"
+    );
     assert_eq!(sig.symbol, "BTC-USDT", "symbol should match");
-    assert_eq!(sig.quantity, Some(Decimal::from(1)), "quantity should be Some(1)");
+    assert_eq!(
+        sig.quantity,
+        Some(Decimal::from(1)),
+        "quantity should be Some(1)"
+    );
     assert_eq!(sig.strength, 1.0, "strength should be 1.0");
     assert_eq!(sig.reason, "AlwaysLong", "reason should be 'AlwaysLong'");
     assert_eq!(sig.stop_loss, None, "stop_loss should be None");
@@ -186,7 +238,11 @@ fn test_ema_crossover_no_signal_early() {
     for idx in 0..10 {
         let ctx = make_context(&bars, idx);
         let signals = strategy.on_bar(&ctx);
-        assert!(signals.is_empty(), "No signal expected before enough data at idx {}", idx);
+        assert!(
+            signals.is_empty(),
+            "No signal expected before enough data at idx {}",
+            idx
+        );
     }
 }
 
@@ -219,7 +275,10 @@ fn test_ema_crossover_bullish_signal() {
             }
         }
     }
-    assert!(found_signal, "Expected at least one bullish EMA crossover signal");
+    assert!(
+        found_signal,
+        "Expected at least one bullish EMA crossover signal"
+    );
 }
 
 #[test]
@@ -251,7 +310,10 @@ fn test_ema_crossover_bearish_signal() {
             }
         }
     }
-    assert!(found_signal, "Expected at least one bearish EMA crossover signal");
+    assert!(
+        found_signal,
+        "Expected at least one bearish EMA crossover signal"
+    );
 }
 
 #[test]
@@ -269,7 +331,11 @@ fn test_ema_crossover_no_crossover() {
     for idx in 25..bars.len() {
         let ctx = make_context(&bars, idx);
         let signals = strategy.on_bar(&ctx);
-        assert!(signals.is_empty(), "Sideways market should not produce crossover signals at idx {}", idx);
+        assert!(
+            signals.is_empty(),
+            "Sideways market should not produce crossover signals at idx {}",
+            idx
+        );
     }
 }
 
@@ -391,7 +457,10 @@ fn test_strategy_with_empty_bars() {
     let single_bar = create_trending_bars("up", 1);
     let ctx = make_context(&single_bar, 0);
     let signals = ema.on_bar(&ctx);
-    assert!(signals.is_empty(), "EmaCrossover should return empty with insufficient data");
+    assert!(
+        signals.is_empty(),
+        "EmaCrossover should return empty with insufficient data"
+    );
 }
 
 #[test]
@@ -406,7 +475,10 @@ fn test_strategy_with_single_bar() {
 
     let ctx = make_context(&bars, 0);
     let signals = strategy.on_bar(&ctx);
-    assert!(signals.is_empty(), "Single bar is not enough for EMA calculation");
+    assert!(
+        signals.is_empty(),
+        "Single bar is not enough for EMA calculation"
+    );
 }
 
 #[test]
@@ -459,9 +531,18 @@ fn test_always_long_backtest() {
     let mut engine = BacktestEngine::new(config, bars, Some(strategy));
     let result = engine.run().expect("Backtest should complete");
 
-    assert_eq!(result.total_trades, 1, "AlwaysLong should produce exactly one trade");
-    assert!(result.final_equity > Decimal::ZERO, "Final equity should be positive");
-    assert!(result.max_drawdown_pct >= 0.0, "Max drawdown should be non-negative");
+    assert_eq!(
+        result.total_trades, 1,
+        "AlwaysLong should produce exactly one trade"
+    );
+    assert!(
+        result.final_equity > Decimal::ZERO,
+        "Final equity should be positive"
+    );
+    assert!(
+        result.max_drawdown_pct >= 0.0,
+        "Max drawdown should be non-negative"
+    );
 }
 
 #[test]
@@ -505,6 +586,12 @@ fn test_ema_crossover_backtest() {
         "EMA crossover should produce at least one trade, got {}",
         result.total_trades
     );
-    assert!(result.final_equity > Decimal::ZERO, "Final equity should be positive");
-    assert!(result.win_rate >= 0.0 && result.win_rate <= 1.0, "Win rate should be between 0 and 1");
+    assert!(
+        result.final_equity > Decimal::ZERO,
+        "Final equity should be positive"
+    );
+    assert!(
+        result.win_rate >= 0.0 && result.win_rate <= 1.0,
+        "Win rate should be between 0 and 1"
+    );
 }

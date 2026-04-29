@@ -25,8 +25,8 @@ impl Strategy for Breakout {
             return vec![];
         }
 
-        let recent_bars =
-            &ctx.historical_bars[ctx.historical_bars.len() - self.lookback..ctx.historical_bars.len()];
+        let recent_bars = &ctx.historical_bars
+            [ctx.historical_bars.len() - self.lookback..ctx.historical_bars.len()];
         let current_close = ctx.current_bar.close;
 
         let highest_high = recent_bars.iter().map(|b| b.high).max().unwrap();

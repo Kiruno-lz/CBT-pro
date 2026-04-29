@@ -46,10 +46,7 @@ impl AggregationEngine {
                 .await
             {
                 Ok(cached) if !cached.is_empty() => {
-                    info!(
-                        count = cached.len(),
-                        "returning cached aggregated bars"
-                    );
+                    info!(count = cached.len(), "returning cached aggregated bars");
                     return Ok(cached);
                 }
                 Ok(_) => {
@@ -71,10 +68,7 @@ impl AggregationEngine {
             let aggregated = Self::aggregate_from_1m(&raw, timeframe)?;
 
             // Opportunistically store the result.
-            if let Err(e) = self
-                .store_aggregated(symbol, timeframe, &aggregated)
-                .await
-            {
+            if let Err(e) = self.store_aggregated(symbol, timeframe, &aggregated).await {
                 warn!(?e, "failed to store aggregated cache");
             }
 
@@ -200,9 +194,7 @@ impl AggregationEngine {
     ) -> Result<(), DataError> {
         if let Some(ref pool) = self.pg_pool {
             let storage = PostgresStorage::from_pool(pool.clone());
-            storage
-                .insert_aggregated(symbol, timeframe, bars)
-                .await?;
+            storage.insert_aggregated(symbol, timeframe, bars).await?;
         }
         Ok(())
     }
@@ -284,9 +276,30 @@ mod tests {
     #[test]
     fn test_aggregate_preserves_decimal_precision() {
         let bars = vec![
-            make_bar(0, "100.12345678", "101.00000001", "99.99999999", "100.50000000", "0.11111111"),
-            make_bar(60, "100.50000000", "102.00000000", "100.00000000", "101.00000000", "0.22222222"),
-            make_bar(120, "101.00000000", "103.00000000", "100.50000000", "102.00000000", "0.33333333"),
+            make_bar(
+                0,
+                "100.12345678",
+                "101.00000001",
+                "99.99999999",
+                "100.50000000",
+                "0.11111111",
+            ),
+            make_bar(
+                60,
+                "100.50000000",
+                "102.00000000",
+                "100.00000000",
+                "101.00000000",
+                "0.22222222",
+            ),
+            make_bar(
+                120,
+                "101.00000000",
+                "103.00000000",
+                "100.50000000",
+                "102.00000000",
+                "0.33333333",
+            ),
         ];
 
         let agg = AggregationEngine::aggregate_from_1m(&bars, TimeFrame::M5).unwrap();

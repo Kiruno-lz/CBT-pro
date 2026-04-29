@@ -1,5 +1,5 @@
-use rust_decimal::Decimal;
 use crate::Direction;
+use rust_decimal::Decimal;
 
 /// Calculates margin and liquidation metrics for leveraged positions.
 pub struct MarginCalculator;

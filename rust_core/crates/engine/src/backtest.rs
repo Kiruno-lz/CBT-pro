@@ -1,14 +1,12 @@
 use orderbook::*;
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 use crate::EngineConfig;
-use orderbook::{
-    InMemoryOrderBook, OrderBookManager, OrderSimulator, MarginCalculator,
-};
-use strategy::{Strategy, Signal, SignalAction, StrategyContext};
+use orderbook::{InMemoryOrderBook, MarginCalculator, OrderBookManager, OrderSimulator};
+use strategy::{Signal, SignalAction, Strategy, StrategyContext};
 
 /// Snapshot of the backtest engine state at a single bar.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,7 +147,9 @@ impl BacktestEngine {
 
         // 1.5 Strategy signal generation
         let equity = self.compute_equity();
-        let positions: Vec<Position> = self.order_book.get_all_positions()
+        let positions: Vec<Position> = self
+            .order_book
+            .get_all_positions()
             .into_iter()
             .cloned()
             .collect();
@@ -173,7 +173,8 @@ impl BacktestEngine {
         self.process_pending_signals();
 
         // 3. Update unrealized PnL for all positions using current bar close
-        self.order_book.update_unrealized_pnl(&self.config.symbol, bar_close);
+        self.order_book
+            .update_unrealized_pnl(&self.config.symbol, bar_close);
 
         // 4. Check liquidations
         self.check_liquidations(bar_close, bar_timestamp);
@@ -192,10 +193,7 @@ impl BacktestEngine {
         if dd > self.max_drawdown {
             self.max_drawdown = dd;
             if !self.peak_equity.is_zero() {
-                self.max_drawdown_pct = (dd / self.peak_equity)
-                    .to_f64()
-                    .unwrap_or(0.0)
-                    * 100.0;
+                self.max_drawdown_pct = (dd / self.peak_equity).to_f64().unwrap_or(0.0) * 100.0;
             }
         }
 
@@ -238,17 +236,20 @@ impl BacktestEngine {
         let bar = if self.current_idx > 0 && self.current_idx <= self.bars.len() {
             self.bars[self.current_idx - 1].clone()
         } else {
-            self.bars.first().cloned().unwrap_or_else(|| data_pipeline::StandardBar {
-                timestamp: 0,
-                open: Decimal::ZERO,
-                high: Decimal::ZERO,
-                low: Decimal::ZERO,
-                close: Decimal::ZERO,
-                volume: Decimal::ZERO,
-                symbol: self.config.symbol.clone(),
-                exchange: "test".to_string(),
-                confirmed: true,
-            })
+            self.bars
+                .first()
+                .cloned()
+                .unwrap_or_else(|| data_pipeline::StandardBar {
+                    timestamp: 0,
+                    open: Decimal::ZERO,
+                    high: Decimal::ZERO,
+                    low: Decimal::ZERO,
+                    close: Decimal::ZERO,
+                    volume: Decimal::ZERO,
+                    symbol: self.config.symbol.clone(),
+                    exchange: "test".to_string(),
+                    confirmed: true,
+                })
         };
         let equity = self.compute_equity();
         self.build_snapshot_impl(bar, equity, Vec::new(), Vec::new())
@@ -321,7 +322,9 @@ impl BacktestEngine {
                 SignalAction::CloseAll => OrderSide::Buy, // Default
             },
             direction: match signal.action {
-                SignalAction::OpenLong | SignalAction::CloseLong | SignalAction::ReduceLong(_) => Direction::Long,
+                SignalAction::OpenLong | SignalAction::CloseLong | SignalAction::ReduceLong(_) => {
+                    Direction::Long
+                }
                 _ => Direction::Short,
             },
             order_type: OrderType::Market,
@@ -387,11 +390,10 @@ impl BacktestEngine {
                 let positions = self.order_book.get_positions_by_symbol(&signal.symbol);
                 if let Some(pos) = positions.first() {
                     let pos_id = pos.id;
-                    if let Ok((_, realized)) = self.order_book.close_position(
-                        pos_id,
-                        &fill,
-                        self.config.cost_basis_method,
-                    ) {
+                    if let Ok((_, realized)) =
+                        self.order_book
+                            .close_position(pos_id, &fill, self.config.cost_basis_method)
+                    {
                         self.balance += realized;
                         self.day_realized_pnl += realized;
                         self.realized_pnl_total += realized;
@@ -401,17 +403,17 @@ impl BacktestEngine {
                 }
             }
             SignalAction::CloseAll => {
-                let pos_ids: Vec<PositionId> = self.order_book
+                let pos_ids: Vec<PositionId> = self
+                    .order_book
                     .get_positions_by_symbol(&signal.symbol)
                     .iter()
                     .map(|pos| pos.id)
                     .collect();
                 for pos_id in pos_ids {
-                    if let Ok((_, realized)) = self.order_book.close_position(
-                        pos_id,
-                        &fill,
-                        self.config.cost_basis_method,
-                    ) {
+                    if let Ok((_, realized)) =
+                        self.order_book
+                            .close_position(pos_id, &fill, self.config.cost_basis_method)
+                    {
                         self.balance += realized;
                         self.day_realized_pnl += realized;
                         self.realized_pnl_total += realized;
@@ -469,11 +471,10 @@ impl BacktestEngine {
                         timestamp: bar_timestamp,
                         realized_pnl: None,
                     };
-                    if let Ok((_, realized)) = self.order_book.close_position(
-                        pos_id,
-                        &fill,
-                        self.config.cost_basis_method,
-                    ) {
+                    if let Ok((_, realized)) =
+                        self.order_book
+                            .close_position(pos_id, &fill, self.config.cost_basis_method)
+                    {
                         self.balance += realized;
                         self.margin_used = Decimal::ZERO;
                         self.record_fill(fill, Some(pos_id), realized);
@@ -544,7 +545,8 @@ impl BacktestEngine {
             orders_history: self.orders_history.clone(),
             daily_pnl: self.daily_pnl.clone(),
             max_drawdown: self.max_drawdown,
-            max_drawdown_pct: Decimal::from_f64_retain(self.max_drawdown_pct).unwrap_or(Decimal::ZERO),
+            max_drawdown_pct: Decimal::from_f64_retain(self.max_drawdown_pct)
+                .unwrap_or(Decimal::ZERO),
             sharpe_ratio: sharpe,
             total_trades: self.total_trades,
             winning_trades: self.winning_trades,
@@ -555,14 +557,22 @@ impl BacktestEngine {
         }
     }
 
-    fn build_snapshot(&mut self, bar: data_pipeline::StandardBar, equity: Decimal) -> EngineSnapshot {
+    fn build_snapshot(
+        &mut self,
+        bar: data_pipeline::StandardBar,
+        equity: Decimal,
+    ) -> EngineSnapshot {
         let signals = std::mem::take(&mut self.last_signals);
         let recent_trades = std::mem::take(&mut self.last_trades);
         self.build_snapshot_impl(bar, equity, signals, recent_trades)
     }
 
     fn build_result(&self) -> BacktestResult {
-        let final_equity = self.equity_curve.last().map(|(_, e)| *e).unwrap_or(self.config.initial_balance);
+        let final_equity = self
+            .equity_curve
+            .last()
+            .map(|(_, e)| *e)
+            .unwrap_or(self.config.initial_balance);
         let total_return_pct = if self.config.initial_balance > Decimal::ZERO {
             ((final_equity - self.config.initial_balance) / self.config.initial_balance)
                 .to_f64()
@@ -598,7 +608,11 @@ impl BacktestEngine {
         };
 
         let avg_trade_return = if self.total_trades > 0 {
-            let total_realized: Decimal = self.orders_history.iter().filter_map(|f| f.realized_pnl).sum();
+            let total_realized: Decimal = self
+                .orders_history
+                .iter()
+                .filter_map(|f| f.realized_pnl)
+                .sum();
             (total_realized / Decimal::from(self.total_trades))
                 .to_f64()
                 .unwrap_or(0.0)
@@ -631,7 +645,8 @@ impl BacktestEngine {
             .map(|(_, pnl)| pnl.to_f64().unwrap_or(0.0))
             .collect();
         let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-        let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+        let variance =
+            returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
         let std_dev = variance.sqrt();
         if std_dev == 0.0 {
             return None;
@@ -691,24 +706,36 @@ mod tests {
         };
         let bars = generate_test_bars();
         let mut engine = BacktestEngine::new(config, bars.clone(), None);
-        
+
         // Before stepping, processed_bars should be empty
         let processed_before = engine.processed_bars();
-        assert_eq!(processed_before.len(), 0, "processed_bars should be empty before stepping");
-        
+        assert_eq!(
+            processed_before.len(),
+            0,
+            "processed_bars should be empty before stepping"
+        );
+
         // Step 10 bars
         for _ in 0..10 {
             engine.step();
         }
-        
+
         // After stepping, processed_bars should have 10 bars
         let processed_after = engine.processed_bars();
-        assert_eq!(processed_after.len(), 10, "processed_bars should have 10 bars after stepping 10 times");
+        assert_eq!(
+            processed_after.len(),
+            10,
+            "processed_bars should have 10 bars after stepping 10 times"
+        );
         assert_eq!(processed_after[0].close, bars[0].close);
         assert_eq!(processed_after[9].close, bars[9].close);
-        
+
         // Total bars should still be 100
-        assert_eq!(engine.bars().len(), 100, "bars() should still return all bars");
+        assert_eq!(
+            engine.bars().len(),
+            100,
+            "bars() should still return all bars"
+        );
     }
 
     #[test]
@@ -897,6 +924,9 @@ mod tests {
             engine.step();
         }
         let snap = engine.get_state();
-        assert_eq!(snap.total_trades, 1, "AlwaysLong should generate exactly one trade");
+        assert_eq!(
+            snap.total_trades, 1,
+            "AlwaysLong should generate exactly one trade"
+        );
     }
 }

@@ -1,8 +1,8 @@
+use crate::error::StrategyError;
+use data_pipeline::StandardBar;
+use orderbook::Position;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use orderbook::Position;
-use data_pipeline::StandardBar;
-use crate::error::StrategyError;
 
 /// Trading signal action types (replacing string-based actions)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,10 +43,14 @@ pub trait Strategy: Send + Sync {
     /// Called on each bar to generate trading signals.
     /// Returns a vector of signals (empty if no action).
     fn on_bar(&mut self, ctx: &StrategyContext) -> Vec<Signal>;
-    
+
     /// Save internal state for persistence (optional).
-    fn save_state(&self) -> Option<Vec<u8>> { None }
-    
+    fn save_state(&self) -> Option<Vec<u8>> {
+        None
+    }
+
     /// Load internal state from persisted data (optional).
-    fn load_state(&mut self, _state: &[u8]) -> Result<(), StrategyError> { Ok(()) }
+    fn load_state(&mut self, _state: &[u8]) -> Result<(), StrategyError> {
+        Ok(())
+    }
 }

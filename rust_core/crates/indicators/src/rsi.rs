@@ -1,9 +1,11 @@
+use crate::{IndicatorError, IndicatorResult};
 use rust_decimal::Decimal;
-use crate::{IndicatorResult, IndicatorError};
 
 pub fn rsi(period: usize, prices: &[Decimal]) -> Result<Vec<IndicatorResult>, IndicatorError> {
     if period == 0 {
-        return Err(IndicatorError::InvalidParameter("period must be > 0".to_string()));
+        return Err(IndicatorError::InvalidParameter(
+            "period must be > 0".to_string(),
+        ));
     }
     if prices.len() <= period {
         return Err(IndicatorError::InsufficientData {
@@ -26,13 +28,13 @@ pub fn rsi(period: usize, prices: &[Decimal]) -> Result<Vec<IndicatorResult>, In
         }
     }
 
-    let mut avg_gain: Decimal = gains[..period].iter().copied().sum::<Decimal>() 
-        / Decimal::from(period as i64);
-    let mut avg_loss: Decimal = losses[..period].iter().copied().sum::<Decimal>() 
-        / Decimal::from(period as i64);
-    
+    let mut avg_gain: Decimal =
+        gains[..period].iter().copied().sum::<Decimal>() / Decimal::from(period as i64);
+    let mut avg_loss: Decimal =
+        losses[..period].iter().copied().sum::<Decimal>() / Decimal::from(period as i64);
+
     let mut result = Vec::new();
-    
+
     let rsi_val = calculate_rsi(avg_gain, avg_loss);
     result.push(IndicatorResult {
         value: rsi_val,
@@ -45,7 +47,7 @@ pub fn rsi(period: usize, prices: &[Decimal]) -> Result<Vec<IndicatorResult>, In
     for i in period..gains.len() {
         avg_gain = (avg_gain * period_minus_one + gains[i]) / period_dec;
         avg_loss = (avg_loss * period_minus_one + losses[i]) / period_dec;
-        
+
         let rsi_val = calculate_rsi(avg_gain, avg_loss);
         result.push(IndicatorResult {
             value: rsi_val,
@@ -80,7 +82,7 @@ mod tests {
         ];
         let result = rsi(2, &prices).unwrap();
         assert_eq!(result.len(), 3);
-        
+
         // Changes: [2, -1, 2, 2]
         // Gains:   [2, 0, 2, 2]
         // Losses:  [0, 1, 0, 0]
@@ -90,14 +92,14 @@ mod tests {
         assert_eq!(result[0].timestamp, 2);
         let expected_rsi_0 = Decimal::from(100) - Decimal::from(100) / Decimal::from(3);
         assert_eq!(result[0].value, expected_rsi_0);
-        
+
         // Next: avg_gain = (1*1 + 2)/2 = 1.5
         //       avg_loss = (0.5*1 + 0)/2 = 0.25
         // RS = 6, RSI = 100 - 100/7 = 85.71
         assert_eq!(result[1].timestamp, 3);
         let expected_rsi_1 = Decimal::from(100) - Decimal::from(100) / Decimal::from(7);
         assert_eq!(result[1].value, expected_rsi_1);
-        
+
         // Next: avg_gain = (1.5*1 + 2)/2 = 1.75
         //       avg_loss = (0.25*1 + 0)/2 = 0.125
         // RS = 14, RSI = 100 - 100/15 = 93.33

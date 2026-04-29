@@ -1,8 +1,8 @@
-pub mod ema;
-pub mod rsi;
-pub mod bollinger;
-pub mod macd;
 pub mod atr;
+pub mod bollinger;
+pub mod ema;
+pub mod macd;
+pub mod rsi;
 pub mod vwap;
 
 use rust_decimal::Decimal;
