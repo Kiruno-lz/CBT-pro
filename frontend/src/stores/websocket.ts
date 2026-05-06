@@ -106,6 +106,11 @@ export class EngineWebSocket {
           currentBarIndex: msg.data.current_bar_index,
           currentTime: msg.data.timestamp,
         });
+        // 到达上限自动标记complete
+        const totalBars = this.store.playback.totalBars;
+        if (msg.data.current_bar_index >= totalBars && totalBars > 0) {
+          this.store.setPlayback({ status: 'complete' });
+        }
         break;
       }
       case 'bar_update': {

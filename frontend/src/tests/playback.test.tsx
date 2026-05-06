@@ -6,7 +6,14 @@ const SPEED_OPTIONS = [0.5, 1, 3, 10, 'max'] as const;
 type Speed = number | 'max';
 
 function getInterval(speed: Speed): number {
-  return speed === 'max' ? 50 : Math.max(200, 1000 / speed);
+  switch (speed) {
+    case 'max': return 6;
+    case 0.5: return 2000;
+    case 1: return 333;
+    case 3: return 100;
+    case 10: return 50;
+    default: return Math.max(200, 1000 / speed);
+  }
 }
 
 function getBackendSpeed(speed: Speed): number {
@@ -60,19 +67,19 @@ describe('PlaybackPanel', () => {
     });
 
     it('should calculate correct interval for speed 1', () => {
-      expect(getInterval(1)).toBe(1000);
+      expect(getInterval(1)).toBe(333);
     });
 
     it('should calculate correct interval for speed 3', () => {
-      expect(getInterval(3)).toBe(1000 / 3);
+      expect(getInterval(3)).toBe(100);
     });
 
-    it('should use minimum 200ms for fast speeds', () => {
-      expect(getInterval(10)).toBe(200);
+    it('should calculate correct interval for speed 10', () => {
+      expect(getInterval(10)).toBe(50);
     });
 
-    it('should use 50ms interval for max speed', () => {
-      expect(getInterval('max')).toBe(50);
+    it('should use 6ms interval for max speed', () => {
+      expect(getInterval('max')).toBe(6);
     });
   });
 });

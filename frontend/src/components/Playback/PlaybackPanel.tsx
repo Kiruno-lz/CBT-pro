@@ -8,6 +8,17 @@ interface PlaybackPanelProps {
 
 const SPEED_OPTIONS: Array<number | 'max'> = [0.5, 1, 3, 10, 'max'];
 
+function getInterval(speed: number | 'max'): number {
+  switch (speed) {
+    case 'max': return 6;
+    case 0.5: return 2000;
+    case 1: return 333;
+    case 3: return 100;
+    case 10: return 50;
+    default: return Math.max(200, 1000 / speed);
+  }
+}
+
 export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
   const { playback, setPlayback, currentStrategy } = useAppStore();
   const { status, speed } = playback;
@@ -29,11 +40,31 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
     }
   }, [status]);
 
+  useEffect(() => {
+    if (
+      playback.currentBarIndex >= playback.totalBars &&
+      playback.totalBars > 0 &&
+      status !== 'complete'
+    ) {
+      setPlayback({ status: 'complete' });
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    }
+  }, [playback.currentBarIndex, playback.totalBars, status]);
+
   const handlePlay = () => {
+    if (intervalRef.current) return;
+    const isAtEnd = playback.currentBarIndex >= playback.totalBars && playback.totalBars > 0;
+    if (isAtEnd) {
+      setPlayback({ status: 'complete' });
+      return;
+    }
     setPlayback({ status: 'playing' });
     const playStep = () => wsRef.current?.sendControl('play');
     playStep();
-    const ms = speed === 'max' ? 50 : Math.max(200, 1000 / speed);
+    const ms = getInterval(speed);
     intervalRef.current = setInterval(playStep, ms);
   };
 
@@ -47,6 +78,11 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
   };
 
   const handleStepForward = () => {
+    const isAtEnd = playback.currentBarIndex >= playback.totalBars && playback.totalBars > 0;
+    if (isAtEnd) {
+      setPlayback({ status: 'complete' });
+      return;
+    }
     wsRef.current?.sendControl('step_forward');
   };
 
