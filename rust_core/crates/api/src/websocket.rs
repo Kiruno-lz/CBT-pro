@@ -93,7 +93,25 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             if let Some(engine) = engines.engines.get_mut(bt_id) {
                                 match action.as_str() {
                                     "step_forward" | "play" => {
-                                        if let Some(snapshot) = engine.step() {
+                                        if engine.is_complete() {
+                                            // Already at end, send complete
+                                            match engine.run() {
+                                                Ok(result) => {
+                                                    let resp = ServerMessage::Complete { result };
+                                                    let _ = socket
+                                                        .send(Message::Text(serde_json::to_string(&resp).unwrap()))
+                                                        .await;
+                                                }
+                                                Err(e) => {
+                                                    let resp = ServerMessage::Error {
+                                                        message: format!("Engine error: {}", e),
+                                                    };
+                                                    let _ = socket
+                                                        .send(Message::Text(serde_json::to_string(&resp).unwrap()))
+                                                        .await;
+                                                }
+                                            }
+                                        } else if let Some(snapshot) = engine.step() {
                                             // Send snapshot
                                             let resp = ServerMessage::Snapshot {
                                                 data: snapshot.clone(),

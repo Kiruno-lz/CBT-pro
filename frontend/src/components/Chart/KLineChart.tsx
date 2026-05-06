@@ -256,16 +256,22 @@ export function KLineChart() {
 
   useEffect(() => {
     if (!candlestickSeriesRef.current || bars.length === 0) return;
-
-    const candleData = bars.map(formatBarToCandle);
-    candlestickSeriesRef.current.setData(candleData);
+    try {
+      const candleData = bars.map(formatBarToCandle);
+      candlestickSeriesRef.current.setData(candleData);
+    } catch (error) {
+      console.error('KLineChart setData error:', error);
+    }
   }, [bars, formatBarToCandle]);
 
   useEffect(() => {
     if (!volumeSeriesRef.current || bars.length === 0) return;
-
-    const volumeData = bars.map(formatBarToVolume);
-    volumeSeriesRef.current.setData(volumeData);
+    try {
+      const volumeData = bars.map(formatBarToVolume);
+      volumeSeriesRef.current.setData(volumeData);
+    } catch (error) {
+      console.error('KLineChart volume setData error:', error);
+    }
   }, [bars, formatBarToVolume]);
 
   useEffect(() => {

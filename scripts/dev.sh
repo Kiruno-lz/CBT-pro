@@ -71,6 +71,22 @@ if [ $MISSING -eq 1 ]; then
     exit 1
 fi
 
+wait_for_port() {
+    local port=$1
+    local timeout=${2:-60}
+    local elapsed=0
+    while ! lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if [ $elapsed -ge $timeout ]; then
+            echo "✗ 等待端口 $port 超时 (${timeout}s)"
+            return 1
+        fi
+    done
+    echo "✓ 端口 $port 已就绪"
+    return 0
+}
+
 cleanup_port() {
     local port=$1
     local pid=$(lsof -ti :$port 2>/dev/null)
@@ -91,15 +107,34 @@ if [ ! -f "$PROJECT_ROOT/rust_core/Cargo.toml" ]; then
     exit 1
 fi
 cd "$PROJECT_ROOT/rust_core"
-cargo run --release > /tmp/rust_backend.log 2>&1 &
-RUST_PID=$!
-sleep 3
-if ! kill -0 $RUST_PID 2>/dev/null; then
-    echo "✗ Rust 后端启动失败"
+
+echo "  编译 Rust 后端（首次可能需要约 1 分钟）..."
+if ! cargo build --release > /tmp/rust_backend.log 2>&1; then
+    echo "✗ Rust 后端编译失败"
     echo "错误日志:"
     tail -30 /tmp/rust_backend.log
     exit 1
 fi
+
+echo "  运行 Rust 后端..."
+./target/release/cbt-pro-api > /tmp/rust_backend.log 2>&1 &
+RUST_PID=$!
+
+echo "  等待后端端口就绪..."
+if ! wait_for_port $REST_PORT 60; then
+    echo "✗ Rust 后端启动失败（REST 端口未就绪）"
+    echo "错误日志:"
+    tail -30 /tmp/rust_backend.log
+    exit 1
+fi
+
+if ! wait_for_port $WS_PORT 60; then
+    echo "✗ Rust 后端启动失败（WebSocket 端口未就绪）"
+    echo "错误日志:"
+    tail -30 /tmp/rust_backend.log
+    exit 1
+fi
+
 echo "  Rust 后端 PID: $RUST_PID"
 
 echo ""
