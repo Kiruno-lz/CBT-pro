@@ -70,7 +70,7 @@ open http://localhost:3000
 
 - Docker + Docker Compose
 - Rust 1.75+ (for engine development)
-- Node.js 20+ (for frontend development)
+- Bun 1.0+ (for frontend development)
 
 ### Rust Core
 
@@ -97,22 +97,22 @@ cargo tarpaulin --workspace --out Xml
 cd frontend
 
 # Install dependencies
-npm ci
+bun install
 
 # Development server
-npm run dev
+bun run dev
 
 # Type check
-npm run typecheck
+bun run typecheck
 
 # Lint
-npm run lint
+bun run lint
 
 # Unit tests
-npm run test:unit
+bun run test:unit
 
 # Production build
-npm run build
+bun run build
 ```
 
 ## Testing
@@ -136,7 +136,7 @@ frontend/src/tests/
 cd rust_core && cargo test --workspace
 
 # Frontend
-cd frontend && npm run test:unit
+cd frontend && bun run test:unit
 ```
 
 ### CI/CD

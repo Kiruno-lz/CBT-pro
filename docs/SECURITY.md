@@ -82,7 +82,7 @@ Every input to the engine is validated:
 
 - Rust: `cargo audit` for known CVEs in dependencies
 - Python: `pip-audit` or `safety` for vulnerability scanning
-- Node.js: `npm audit` in CI pipeline
+- Node.js: `bun audit` in CI pipeline
 - Automated Dependabot alerts for all ecosystems
 
 ### 7. Network Security

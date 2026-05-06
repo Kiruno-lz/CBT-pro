@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 
 export default [
-  { ignores: ['dist'] },
+  { ignores: ['dist', 'tests/e2e/**/*.spec.ts'] },
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
@@ -27,6 +27,23 @@ export default [
         { allowConstantExport: true },
       ],
       'no-unused-vars': 'off',
+    },
+  },
+  {
+    files: ['src/tests/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+      },
+    },
+  },
+  {
+    files: ['*.config.ts'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
     },
   },
 ];

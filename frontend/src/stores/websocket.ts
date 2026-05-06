@@ -126,7 +126,6 @@ export class EngineWebSocket {
         break;
       }
       case 'error': {
-        // eslint-disable-next-line no-console
         console.error('WebSocket error:', msg.message);
         break;
       }

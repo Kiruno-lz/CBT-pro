@@ -74,27 +74,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-          cache: "pnpm"
-          cache-dependency-path: frontend/pnpm-lock.yaml
+      - uses: oven-sh/setup-bun@v2
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Run ESLint
-        run: pnpm run lint -- --fix
+        run: bun run lint -- --fix
 
       - name: Run TypeScript type check
-        run: pnpm run typecheck
+        run: bun run typecheck
 
       - name: Run unit tests
-        run: pnpm test
+        run: bun test
 
       - name: Build production bundle
-        run: pnpm run build
+        run: bun run build
