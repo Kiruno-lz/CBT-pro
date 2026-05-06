@@ -65,7 +65,7 @@ export function SignalsPanel() {
 
 function SignalRow({ signal }: { signal: Signal }) {
   const actionColorClass = ACTION_COLORS[signal.action];
-  const timestamp = new Date(signal.timestamp);
+  const timestamp = new Date(signal.timestamp * 1000);
   const timeStr = timestamp.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',

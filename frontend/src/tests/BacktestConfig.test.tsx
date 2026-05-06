@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { BacktestConfig } from './BacktestConfig';
-import { useAppStore } from '../../stores/useAppStore';
+import { BacktestConfig } from '../components/Backtest/BacktestConfig';
+import { useAppStore } from '../stores/useAppStore';
 
 describe('BacktestConfig', () => {
   const mockWsRef = { current: { subscribe: vi.fn() } as any };
@@ -86,7 +86,10 @@ describe('BacktestConfig', () => {
     fireEvent.change(strategySelect, { target: { value: 'rsi_macd' } });
     
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(expect.stringContaining('/api/strategies/rsi_macd/defaults'));
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/strategies/rsi_macd/defaults'),
+        expect.any(Object)
+      );
     });
   });
 

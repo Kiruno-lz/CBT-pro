@@ -10,6 +10,7 @@ import {
   type SeriesMarkerPosition,
 } from 'lightweight-charts';
 import { useAppStore } from '../../stores/useAppStore';
+import { fetchWithTimeout } from '../../utils/fetch';
 import type { StandardBar, IndicatorValue } from '../../types';
 
 interface IndicatorData {
@@ -92,7 +93,7 @@ export function KLineChart() {
 
   const formatBarToCandle = useCallback((bar: StandardBar): CandlestickData<Time> => {
     return {
-      time: (bar.timestamp / 1000) as Time,
+      time: bar.timestamp as Time,
       open: parseFloat(bar.open),
       high: parseFloat(bar.high),
       low: parseFloat(bar.low),
@@ -103,7 +104,7 @@ export function KLineChart() {
   const formatBarToVolume = useCallback((bar: StandardBar) => {
     const isUp = parseFloat(bar.close) >= parseFloat(bar.open);
     return {
-      time: (bar.timestamp / 1000) as Time,
+      time: bar.timestamp as Time,
       value: parseFloat(bar.volume),
       color: isUp ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.4)',
     };
@@ -138,8 +139,10 @@ export function KLineChart() {
     const symbol = snapshot?.current_bar?.symbol || bars[0]?.symbol || '';
 
     try {
-      const response = await fetch(
-        `/api/indicators?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(chartTimeframe)}&indicators=${encodeURIComponent(indicatorNames)}&backtest_id=${encodeURIComponent(backtestId)}&full=true`
+      const response = await fetchWithTimeout(
+        `/api/indicators?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(chartTimeframe)}&indicators=${encodeURIComponent(indicatorNames)}&backtest_id=${encodeURIComponent(backtestId)}&full=true`,
+        {},
+        10000
       );
 
       if (!response.ok) return;
@@ -159,7 +162,11 @@ export function KLineChart() {
 
       setIndicatorData(newData);
     } catch (error) {
-      console.error('Failed to fetch indicators:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error('Failed to fetch indicators: Request timed out');
+      } else {
+        console.error('Failed to fetch indicators:', error);
+      }
     }
   }, [backtestId, bars, indicators, chartTimeframe, snapshot]);
 
@@ -303,7 +310,7 @@ export function KLineChart() {
         });
         upperSeries.setData(
           data.values.map((v) => ({
-            time: (v.timestamp / 1000) as Time,
+            time: v.timestamp as Time,
             value: parseFloat(v.upper || '0'),
           }))
         );
@@ -317,7 +324,7 @@ export function KLineChart() {
         });
         middleSeries.setData(
           data.values.map((v) => ({
-            time: (v.timestamp / 1000) as Time,
+            time: v.timestamp as Time,
             value: parseFloat(v.middle || '0'),
           }))
         );
@@ -331,7 +338,7 @@ export function KLineChart() {
         });
         lowerSeries.setData(
           data.values.map((v) => ({
-            time: (v.timestamp / 1000) as Time,
+            time: v.timestamp as Time,
             value: parseFloat(v.lower || '0'),
           }))
         );
@@ -344,7 +351,7 @@ export function KLineChart() {
         });
         macdSeries.setData(
           data.values.map((v) => ({
-            time: (v.timestamp / 1000) as Time,
+            time: v.timestamp as Time,
             value: parseFloat(v.macd || '0'),
           }))
         );
@@ -357,7 +364,7 @@ export function KLineChart() {
         });
         signalSeries.setData(
           data.values.map((v) => ({
-            time: (v.timestamp / 1000) as Time,
+            time: v.timestamp as Time,
             value: parseFloat(v.signal || '0'),
           }))
         );
@@ -369,7 +376,7 @@ export function KLineChart() {
         });
         histogramSeries.setData(
           data.values.map((v) => ({
-            time: (v.timestamp / 1000) as Time,
+            time: v.timestamp as Time,
             value: parseFloat(v.histogram || '0'),
           }))
         );
@@ -385,7 +392,7 @@ export function KLineChart() {
         });
         series.setData(
           data.values.map((v) => ({
-            time: (v.timestamp / 1000) as Time,
+            time: v.timestamp as Time,
             value: parseFloat(v.value || '0'),
           }))
         );
@@ -413,7 +420,7 @@ export function KLineChart() {
             <div className="flex items-center gap-3 font-mono text-2xs">
               <span className="text-text-secondary">{snapshot.current_bar.symbol}</span>
               <span className="text-text-muted">
-                {new Date(snapshot.current_bar.timestamp).toLocaleString()}
+                {new Date(snapshot.current_bar.timestamp * 1000).toLocaleString()}
               </span>
             </div>
           )}
