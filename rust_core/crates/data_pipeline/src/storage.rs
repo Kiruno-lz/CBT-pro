@@ -1,4 +1,4 @@
-use crate::{error::DataError, StandardBar, TimeFrame};
+use crate::{error::DataError, StandardBar};
 use arrow::array::{BooleanArray, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -10,33 +10,102 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// PostgreSQL-backed storage for raw and aggregated bars.
+/// PostgreSQL-backed storage for raw 1-minute OHLCV bars.
 ///
-/// Expected raw table (created by migrations):
+/// Uses the unified `ohlcv_1m` table (created by migrations).
+/// All aggregated data is computed on-the-fly from raw 1m data.
+///
+/// Expected table schema:
 /// ```sql
-/// CREATE TABLE bars_1m (
+/// CREATE TABLE ohlcv_1m (
+///     id         BIGSERIAL PRIMARY KEY,
+///     symbol     VARCHAR(32) NOT NULL,
 ///     timestamp  BIGINT NOT NULL,
-///     open       NUMERIC NOT NULL,
-///     high       NUMERIC NOT NULL,
-///     low        NUMERIC NOT NULL,
-///     close      NUMERIC NOT NULL,
-///     volume     NUMERIC NOT NULL,
-///     symbol     TEXT NOT NULL,
-///     exchange   TEXT NOT NULL,
+///     open       NUMERIC(24, 8) NOT NULL,
+///     high       NUMERIC(24, 8) NOT NULL,
+///     low        NUMERIC(24, 8) NOT NULL,
+///     close      NUMERIC(24, 8) NOT NULL,
+///     volume     NUMERIC(24, 8) NOT NULL,
+///     exchange   VARCHAR(32) NOT NULL,
 ///     confirmed  BOOLEAN NOT NULL DEFAULT true,
-///     PRIMARY KEY (symbol, timestamp)
+///     UNIQUE (symbol, timestamp, exchange)
 /// );
-/// CREATE INDEX idx_bars_1m_symbol_ts ON bars_1m(symbol, timestamp);
+/// CREATE INDEX idx_ohlcv_1m_brin ON ohlcv_1m USING BRIN (symbol, timestamp);
+/// CREATE INDEX idx_ohlcv_1m_symbol ON ohlcv_1m (symbol);
 /// ```
+#[derive(Debug)]
 pub struct PostgresStorage {
     pool: PgPool,
 }
 
 impl PostgresStorage {
-    /// Connect to the database.
+    /// Connect to the database and ensure schema exists.
     pub async fn connect(database_url: &str) -> Result<Self, DataError> {
         let pool = sqlx::postgres::PgPool::connect(database_url).await?;
-        Ok(Self { pool })
+        let storage = Self { pool };
+        storage.init_schema().await?;
+        Ok(storage)
+    }
+
+    /// Initialize database schema if not present.
+    async fn init_schema(&self) -> Result<(), DataError> {
+        let table_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'ohlcv_1m'
+            )",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        if !table_exists {
+            info!("ohlcv_1m table not found, creating schema...");
+
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS ohlcv_1m (
+                    id BIGSERIAL PRIMARY KEY,
+                    symbol VARCHAR(32) NOT NULL,
+                    timestamp BIGINT NOT NULL,
+                    open NUMERIC(24, 8) NOT NULL,
+                    high NUMERIC(24, 8) NOT NULL,
+                    low NUMERIC(24, 8) NOT NULL,
+                    close NUMERIC(24, 8) NOT NULL,
+                    volume NUMERIC(24, 8) NOT NULL,
+                    exchange VARCHAR(32) NOT NULL,
+                    confirmed BOOLEAN NOT NULL DEFAULT TRUE,
+                    UNIQUE (symbol, timestamp, exchange)
+                )
+                "#,
+            )
+            .execute(&self.pool)
+            .await?;
+
+            sqlx::query(
+                r#"
+                CREATE INDEX IF NOT EXISTS idx_ohlcv_1m_brin
+                    ON ohlcv_1m USING BRIN (symbol, timestamp)
+                    WITH (pages_per_range = 128)
+                "#,
+            )
+            .execute(&self.pool)
+            .await?;
+
+            sqlx::query(
+                r#"
+                CREATE INDEX IF NOT EXISTS idx_ohlcv_1m_symbol
+                    ON ohlcv_1m (symbol)
+                "#,
+            )
+            .execute(&self.pool)
+            .await?;
+
+            info!("ohlcv_1m schema created successfully");
+        } else {
+            debug!("ohlcv_1m table already exists, skipping schema init");
+        }
+
+        Ok(())
     }
 
     /// Wrap an existing pool (used by `AggregationEngine`).
@@ -62,18 +131,18 @@ impl PostgresStorage {
         for bar in bars {
             let result = sqlx::query(
                 r#"
-                INSERT INTO bars_1m (timestamp, open, high, low, close, volume, symbol, exchange, confirmed)
+                INSERT INTO ohlcv_1m (symbol, timestamp, open, high, low, close, volume, exchange, confirmed)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (symbol, timestamp) DO NOTHING
+                ON CONFLICT (symbol, timestamp, exchange) DO NOTHING
                 "#,
             )
+            .bind(&bar.symbol)
             .bind(bar.timestamp)
             .bind(bar.open)
             .bind(bar.high)
             .bind(bar.low)
             .bind(bar.close)
             .bind(bar.volume)
-            .bind(&bar.symbol)
             .bind(&bar.exchange)
             .bind(bar.confirmed)
             .execute(&mut *tx)
@@ -83,7 +152,7 @@ impl PostgresStorage {
         }
 
         tx.commit().await?;
-        info!(inserted, "bars inserted into bars_1m");
+        info!(inserted, "bars inserted into ohlcv_1m");
         Ok(inserted)
     }
 
@@ -98,8 +167,8 @@ impl PostgresStorage {
 
         let rows = sqlx::query_as::<_, BarRow>(
             r#"
-            SELECT timestamp, open, high, low, close, volume, symbol, exchange, confirmed
-            FROM bars_1m
+            SELECT symbol, timestamp, open, high, low, close, volume, exchange, confirmed
+            FROM ohlcv_1m
             WHERE symbol = $1 AND timestamp >= $2 AND timestamp <= $3
             ORDER BY timestamp ASC
             "#,
@@ -117,8 +186,8 @@ impl PostgresStorage {
     pub async fn query_latest(&self, symbol: &str) -> Result<Option<StandardBar>, DataError> {
         let row = sqlx::query_as::<_, BarRow>(
             r#"
-            SELECT timestamp, open, high, low, close, volume, symbol, exchange, confirmed
-            FROM bars_1m
+            SELECT symbol, timestamp, open, high, low, close, volume, exchange, confirmed
+            FROM ohlcv_1m
             WHERE symbol = $1
             ORDER BY timestamp DESC
             LIMIT 1
@@ -131,102 +200,44 @@ impl PostgresStorage {
         Ok(row.map(|r| r.into()))
     }
 
-    /// Insert aggregated bars into the per-timeframe cache table.
-    pub async fn insert_aggregated(
-        &self,
-        _symbol: &str,
-        timeframe: TimeFrame,
-        bars: &[StandardBar],
-    ) -> Result<u64, DataError> {
-        if bars.is_empty() {
-            return Ok(0);
-        }
-
-        let table = format!("bars_{:?}", timeframe).to_lowercase();
-        let mut tx = self.pool.begin().await?;
-        let mut inserted: u64 = 0;
-
-        for bar in bars {
-            let result = sqlx::query(&format!(
-                r#"
-                INSERT INTO {} (timestamp, open, high, low, close, volume, symbol, exchange, confirmed)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (symbol, timestamp) DO NOTHING
-                "#,
-                table
-            ))
-            .bind(bar.timestamp)
-            .bind(bar.open)
-            .bind(bar.high)
-            .bind(bar.low)
-            .bind(bar.close)
-            .bind(bar.volume)
-            .bind(&bar.symbol)
-            .bind(&bar.exchange)
-            .bind(bar.confirmed)
-            .execute(&mut *tx)
-            .await?;
-
-            inserted += result.rows_affected();
-        }
-
-        tx.commit().await?;
-        info!(inserted, table, "aggregated bars inserted");
-        Ok(inserted)
-    }
-
-    /// Query the aggregated cache table for a given timeframe.
-    pub async fn query_aggregated(
-        &self,
-        symbol: &str,
-        timeframe: TimeFrame,
-        start: i64,
-        end: i64,
-    ) -> Result<Vec<StandardBar>, DataError> {
-        let table = format!("bars_{:?}", timeframe).to_lowercase();
-        debug!(symbol, ?timeframe, start, end, table, "query_aggregated");
-
-        let rows = sqlx::query_as::<_, BarRow>(&format!(
+    /// Query continuous data ranges for a symbol from the raw 1-minute table.
+    ///
+    /// Returns a list of `(start, end)` tuples where each range represents
+    /// a continuous block of 1-minute bars (interval = 60 seconds).
+    pub async fn query_data_ranges(&self, symbol: &str) -> Result<Vec<(i64, i64)>, DataError> {
+        let rows = sqlx::query_as::<_, (i64,)>(
             r#"
-            SELECT timestamp, open, high, low, close, volume, symbol, exchange, confirmed
-            FROM {}
-            WHERE symbol = $1 AND timestamp >= $2 AND timestamp <= $3
+            SELECT timestamp
+            FROM ohlcv_1m
+            WHERE symbol = $1
             ORDER BY timestamp ASC
             "#,
-            table
-        ))
+        )
         .bind(symbol)
-        .bind(start)
-        .bind(end)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(|r| r.into()).collect())
-    }
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
 
-    /// Return the latest aggregated bar for a symbol / timeframe.
-    pub async fn query_latest_aggregated(
-        &self,
-        symbol: &str,
-        timeframe: TimeFrame,
-    ) -> Result<Option<StandardBar>, DataError> {
-        let table = format!("bars_{:?}", timeframe).to_lowercase();
+        let mut ranges = Vec::new();
+        let mut range_start = rows[0].0;
+        let mut range_end = rows[0].0 + 60;
 
-        let row = sqlx::query_as::<_, BarRow>(&format!(
-            r#"
-            SELECT timestamp, open, high, low, close, volume, symbol, exchange, confirmed
-            FROM {}
-            WHERE symbol = $1
-            ORDER BY timestamp DESC
-            LIMIT 1
-            "#,
-            table
-        ))
-        .bind(symbol)
-        .fetch_optional(&self.pool)
-        .await?;
+        for row in rows.iter().skip(1) {
+            let ts = row.0;
+            if ts == range_end {
+                range_end = ts + 60;
+            } else {
+                ranges.push((range_start, range_end));
+                range_start = ts;
+                range_end = ts + 60;
+            }
+        }
 
-        Ok(row.map(|r| r.into()))
+        ranges.push((range_start, range_end));
+        Ok(ranges)
     }
 }
 
@@ -257,6 +268,30 @@ impl From<BarRow> for StandardBar {
             exchange: r.exchange,
             confirmed: r.confirmed,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DataStorage trait implementation for PostgresStorage
+// ---------------------------------------------------------------------------
+
+#[async_trait::async_trait]
+impl crate::fetcher::DataStorage for PostgresStorage {
+    async fn query_data_ranges(&self, symbol: &str) -> Result<Vec<(i64, i64)>, DataError> {
+        self.query_data_ranges(symbol).await
+    }
+
+    async fn insert_bars(&self, bars: &[StandardBar]) -> Result<u64, DataError> {
+        self.insert_bars(bars).await
+    }
+
+    async fn query_bars(
+        &self,
+        symbol: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<StandardBar>, DataError> {
+        self.query_bars(symbol, start, end).await
     }
 }
 
@@ -612,5 +647,338 @@ mod tests {
                 "/tmp/cbt/data/parquet/binance/BTC-USDT/2024/01/BTC-USDT_20240101.parquet"
             )
         );
+    }
+
+    #[test]
+    fn test_parquet_empty_write() {
+        let dir = tempdir().unwrap();
+        let storage = ParquetStorage::new(dir.path().to_str().unwrap());
+        storage.write_bars(&[]).unwrap();
+        // No file should be created
+        let entries: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_parquet_multiple_months() {
+        let dir = tempdir().unwrap();
+        let storage = ParquetStorage::new(dir.path().to_str().unwrap());
+
+        // January 2024
+        let jan_bars = vec![
+            make_bar(
+                1704067200, "42000.00", "42100.00", "41900.00", "42050.00", "100.0",
+            ),
+            make_bar(
+                1704067260, "42050.00", "42200.00", "42000.00", "42150.00", "200.0",
+            ),
+        ];
+        // February 2024
+        let feb_bars = vec![make_bar(
+            1706749200, "43000.00", "43100.00", "42900.00", "43050.00", "300.0",
+        )];
+
+        let mut all_bars = jan_bars.clone();
+        all_bars.extend(feb_bars.clone());
+        storage.write_bars(&all_bars).unwrap();
+
+        let read_jan = storage.read_bars("BTC-USDT", "binance", 2024, 1).unwrap();
+        assert_eq!(read_jan.len(), 2);
+
+        let read_feb = storage.read_bars("BTC-USDT", "binance", 2024, 2).unwrap();
+        assert_eq!(read_feb.len(), 1);
+        assert_eq!(read_feb[0].timestamp, 1706749200);
+    }
+
+    #[test]
+    fn test_parquet_read_nonexistent_file() {
+        let dir = tempdir().unwrap();
+        let storage = ParquetStorage::new(dir.path().to_str().unwrap());
+
+        let result = storage.read_bars("BTC-USDT", "binance", 2024, 1);
+        assert!(matches!(result, Err(DataError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_parquet_invalid_timestamp() {
+        let dir = tempdir().unwrap();
+        let storage = ParquetStorage::new(dir.path().to_str().unwrap());
+
+        let bars = vec![StandardBar {
+            timestamp: i64::MAX,
+            open: Decimal::from(1),
+            high: Decimal::from(2),
+            low: Decimal::from(1),
+            close: Decimal::from(2),
+            volume: Decimal::from(100),
+            symbol: "BTC-USDT".to_string(),
+            exchange: "binance".to_string(),
+            confirmed: true,
+        }];
+
+        let result = storage.write_bars(&bars);
+        assert!(matches!(result, Err(DataError::Storage(_))));
+    }
+
+    // ---------------------------------------------------------------------------
+    // PostgresStorage integration tests
+    // ---------------------------------------------------------------------------
+
+    const TEST_DATABASE_URL: &str = "postgresql://cbtpro:cbtpro@172.18.0.2:5432/cbtpro";
+
+    async fn setup_test_db() -> Option<PostgresStorage> {
+        match PostgresStorage::connect(TEST_DATABASE_URL).await {
+            Ok(storage) => {
+                // Clean up test data
+                let _ = sqlx::query("DELETE FROM ohlcv_1m WHERE symbol LIKE 'TEST-%'")
+                    .execute(storage.pool())
+                    .await;
+                Some(storage)
+            }
+            Err(_) => None,
+        }
+    }
+
+    fn make_test_bar(ts: i64, symbol: &str, exchange: &str) -> StandardBar {
+        StandardBar {
+            timestamp: ts,
+            open: Decimal::from(100),
+            high: Decimal::from(110),
+            low: Decimal::from(90),
+            close: Decimal::from(105),
+            volume: Decimal::from(1000),
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            confirmed: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_postgres_insert_and_query() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-BTC/USDT";
+        let bars = vec![
+            make_test_bar(1704067200, symbol, "binance"),
+            make_test_bar(1704067260, symbol, "binance"),
+            make_test_bar(1704067320, symbol, "binance"),
+        ];
+
+        let inserted = storage.insert_bars(&bars).await.unwrap();
+        assert_eq!(inserted, 3);
+
+        let queried = storage
+            .query_bars(symbol, 1704067200, 1704067320)
+            .await
+            .unwrap();
+        assert_eq!(queried.len(), 3);
+        assert_eq!(queried[0].timestamp, 1704067200);
+        assert_eq!(queried[2].timestamp, 1704067320);
+    }
+
+    #[tokio::test]
+    async fn test_postgres_insert_duplicate_ignored() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-ETH/USDT";
+        let bars = vec![make_test_bar(1704067200, symbol, "okx")];
+
+        let inserted1 = storage.insert_bars(&bars).await.unwrap();
+        assert_eq!(inserted1, 1);
+
+        let inserted2 = storage.insert_bars(&bars).await.unwrap();
+        assert_eq!(inserted2, 0);
+
+        let queried = storage
+            .query_bars(symbol, 1704067200, 1704067200)
+            .await
+            .unwrap();
+        assert_eq!(queried.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_postgres_query_empty_range() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-EMPTY";
+        let bars = vec![make_test_bar(1704067200, symbol, "binance")];
+        storage.insert_bars(&bars).await.unwrap();
+
+        let queried = storage
+            .query_bars(symbol, 1704067400, 1704067500)
+            .await
+            .unwrap();
+        assert!(queried.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_postgres_query_latest() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-LATEST";
+        let bars = vec![
+            make_test_bar(1704067200, symbol, "binance"),
+            make_test_bar(1704067260, symbol, "binance"),
+            make_test_bar(1704067320, symbol, "binance"),
+        ];
+
+        storage.insert_bars(&bars).await.unwrap();
+
+        let latest = storage.query_latest(symbol).await.unwrap();
+        assert!(latest.is_some());
+        assert_eq!(latest.unwrap().timestamp, 1704067320);
+    }
+
+    #[tokio::test]
+    async fn test_postgres_query_latest_nonexistent() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let latest = storage.query_latest("TEST-NONEXISTENT").await.unwrap();
+        assert!(latest.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_postgres_query_data_ranges() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-RANGES";
+        let bars = vec![
+            make_test_bar(1704067200, symbol, "binance"),
+            make_test_bar(1704067260, symbol, "binance"),
+            make_test_bar(1704067320, symbol, "binance"),
+            make_test_bar(1704067500, symbol, "binance"),
+            make_test_bar(1704067560, symbol, "binance"),
+        ];
+
+        storage.insert_bars(&bars).await.unwrap();
+
+        let ranges = storage.query_data_ranges(symbol).await.unwrap();
+        assert_eq!(ranges.len(), 2);
+        // First range: 1704067200 to 1704067380 (3 bars)
+        assert_eq!(ranges[0], (1704067200, 1704067380));
+        // Second range: 1704067500 to 1704067620 (2 bars)
+        assert_eq!(ranges[1], (1704067500, 1704067620));
+    }
+
+    #[tokio::test]
+    async fn test_postgres_query_data_ranges_empty() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let ranges = storage.query_data_ranges("TEST-NO-RANGES").await.unwrap();
+        assert!(ranges.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_postgres_insert_empty() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let inserted = storage.insert_bars(&[]).await.unwrap();
+        assert_eq!(inserted, 0);
+    }
+
+    #[tokio::test]
+    async fn test_postgres_query_nonexistent_symbol() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let queried = storage.query_bars("TEST-NO-SYMBOL", 0, 1000).await.unwrap();
+        assert!(queried.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_postgres_data_storage_trait() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-TRAIT";
+        let bars = vec![
+            make_test_bar(1704067200, symbol, "binance"),
+            make_test_bar(1704067260, symbol, "binance"),
+        ];
+
+        let inserted = storage.insert_bars(&bars).await.unwrap();
+        assert_eq!(inserted, 2);
+
+        let queried = storage
+            .query_bars(symbol, 1704067200, 1704067260)
+            .await
+            .unwrap();
+        assert_eq!(queried.len(), 2);
+
+        let ranges = storage.query_data_ranges(symbol).await.unwrap();
+        assert_eq!(ranges.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_postgres_multiple_exchanges_same_symbol() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-MULTI-EX";
+        let bars = vec![
+            make_test_bar(1704067200, symbol, "binance"),
+            make_test_bar(1704067200, symbol, "okx"),
+        ];
+
+        let inserted = storage.insert_bars(&bars).await.unwrap();
+        assert_eq!(inserted, 2);
+
+        let queried = storage
+            .query_bars(symbol, 1704067200, 1704067200)
+            .await
+            .unwrap();
+        assert_eq!(queried.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_postgres_large_batch_insert() {
+        let Some(storage) = setup_test_db().await else {
+            eprintln!("Skipping postgres test: database not available");
+            return;
+        };
+
+        let symbol = "TEST-LARGE";
+        let bars: Vec<StandardBar> = (0..100)
+            .map(|i| make_test_bar(1704067200 + i * 60, symbol, "binance"))
+            .collect();
+
+        let inserted = storage.insert_bars(&bars).await.unwrap();
+        assert_eq!(inserted, 100);
+
+        let queried = storage
+            .query_bars(symbol, 1704067200, 1704067200 + 99 * 60)
+            .await
+            .unwrap();
+        assert_eq!(queried.len(), 100);
     }
 }

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { KLineChart } from './KLineChart';
-import { useAppStore } from '../../stores/useAppStore';
-import type { StandardBar, IndicatorConfig } from '../../types';
+import { KLineChart } from '../components/Chart/KLineChart';
+import { useAppStore } from '../stores/useAppStore';
+import type { StandardBar, IndicatorConfig } from '../types';
 
 // Mock lightweight-charts
 vi.mock('lightweight-charts', () => ({

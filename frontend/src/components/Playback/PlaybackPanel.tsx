@@ -61,7 +61,7 @@ export function PlaybackPanel({ wsRef }: PlaybackPanelProps) {
 
   const formatTime = (timestamp: number) => {
     if (!timestamp) return '--:--:--';
-    return new Date(timestamp).toLocaleTimeString();
+    return new Date(timestamp * 1000).toLocaleTimeString();
   };
 
   return (

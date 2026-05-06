@@ -1,6 +1,7 @@
 import { useState, useEffect, type RefObject } from 'react';
 import { useAppStore } from '../../stores/useAppStore';
 import { EngineWebSocket } from '../../stores/websocket';
+import { fetchWithTimeout } from '../../utils/fetch';
 import type { TimeFrame, StrategyDefaults, IndicatorConfig, ParamDefinition } from '../../types';
 
 interface BacktestConfigForm {
@@ -211,7 +212,7 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
     setStrategyParams({});
     setParamsExpanded(false);
 
-    fetch(`${API_BASE}/api/strategies/${strategyId}/defaults`)
+    fetchWithTimeout(`${API_BASE}/api/strategies/${strategyId}/defaults`, {}, 10000)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -231,7 +232,10 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
         console.log('Initial load - defaultIndicators:', defaultIndicators.map(i => ({ name: i.name, visible: i.visible })));
         setIndicators(defaultIndicators);
       })
-      .catch(() => {
+      .catch((err) => {
+        if (err instanceof Error && err.name === 'AbortError') {
+          console.error('Failed to fetch strategy defaults: Request timed out');
+        }
         setStrategyDefaults(null);
         setStrategyParams({});
         setIndicators(ALL_INDICATORS.map(ind => ({ ...ind })));
@@ -282,23 +286,27 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE}/api/backtest/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          config: {
-            symbol: formatSymbol(form.symbol),
-            initial_balance: form.initialBalance,
-            margin_mode: 'Isolated',
-            default_leverage: form.leverage,
-          },
-          strategy_id: STRATEGY_ID_MAP[form.strategy] || form.strategy,
-          strategy_params: strategyParams,
-          timeframe: TIMEFAME_MAP[form.timeframe] || form.timeframe,
-          start_time: dateToTimestamp(form.startDate),
-          end_time: dateToTimestamp(form.endDate),
-        }),
-      });
+      const response = await fetchWithTimeout(
+        `${API_BASE}/api/backtest/start`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            config: {
+              symbol: formatSymbol(form.symbol),
+              initial_balance: form.initialBalance,
+              margin_mode: 'Isolated',
+              default_leverage: form.leverage,
+            },
+            strategy_id: STRATEGY_ID_MAP[form.strategy] || form.strategy,
+            strategy_params: strategyParams,
+            timeframe: TIMEFAME_MAP[form.timeframe] || form.timeframe,
+            start_time: dateToTimestamp(form.startDate),
+            end_time: dateToTimestamp(form.endDate),
+          }),
+        },
+        30000
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -320,7 +328,11 @@ export function BacktestConfig({ wsRef }: BacktestConfigProps) {
         setCurrentStrategy({ ...strategyDefaults, default_params: strategyParams });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start backtest');
+      if (err instanceof Error && err.name === 'AbortError') {
+        setError('Request timed out. Please try again.');
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to start backtest');
+      }
     } finally {
       setLoading(false);
     }
