@@ -1,17 +1,17 @@
 # ============================================================================
 # Stage 1: Build
 # ============================================================================
-FROM node:20-alpine AS builder
+FROM oven/bun:1-alpine AS builder
 
 WORKDIR /app
 
 # Install dependencies first (better layer caching)
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 
 # Copy source and build
 COPY . .
-RUN npm run build
+RUN bun run build
 
 # ============================================================================
 # Stage 2: Runtime

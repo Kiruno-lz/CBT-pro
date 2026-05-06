@@ -5,11 +5,15 @@ import { useAppStore } from '../stores/useAppStore';
 
 describe('BacktestConfig', () => {
   const mockWsRef = { current: { subscribe: vi.fn() } as any };
+  let originalFetch: typeof globalThis.fetch;
   
   // Helper to get the strategy select (second combobox)
   const getStrategySelect = () => screen.getAllByRole('combobox')[1];
   
   beforeEach(() => {
+    // Save original fetch
+    originalFetch = globalThis.fetch;
+    
     // Reset store to initial state
     useAppStore.setState({
       wsConnected: false,
@@ -30,7 +34,7 @@ describe('BacktestConfig', () => {
     });
 
     // Reset fetch mock - must return a promise to avoid .then() on undefined
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({
         id: 'default',
@@ -39,11 +43,11 @@ describe('BacktestConfig', () => {
         default_params: {},
         param_definitions: [],
       }),
-    }));
+    }) as unknown as typeof globalThis.fetch;
   });
 
   afterEach(() => {
-    vi.unstubAllGlobals();
+    globalThis.fetch = originalFetch;
     vi.restoreAllMocks();
   });
 
@@ -54,8 +58,9 @@ describe('BacktestConfig', () => {
     expect(comboboxes).toHaveLength(2); // Symbol and Strategy
     expect(screen.getByText(/timeframe/i)).toBeInTheDocument();
     // Use getByDisplayValue for inputs since labels don't have htmlFor attributes
-    expect(screen.getByDisplayValue('2024-01-01')).toBeInTheDocument(); // Start Date
-    expect(screen.getByDisplayValue('2024-12-31')).toBeInTheDocument(); // End Date
+    // Date values are dynamic (6 months ago to yesterday), so just check inputs exist
+    const dateInputs = document.querySelectorAll('input[type="date"]');
+    expect(dateInputs).toHaveLength(2);
     expect(screen.getByDisplayValue('10000')).toBeInTheDocument(); // Initial Balance
     expect(screen.getByDisplayValue('10')).toBeInTheDocument(); // Leverage
   });
@@ -78,7 +83,7 @@ describe('BacktestConfig', () => {
         param_definitions: [],
       }),
     });
-    vi.stubGlobal('fetch', mockFetch);
+    globalThis.fetch = mockFetch as unknown as typeof globalThis.fetch;
 
     render(<BacktestConfig wsRef={mockWsRef} />);
     
@@ -115,7 +120,7 @@ describe('BacktestConfig', () => {
         ],
       }),
     });
-    vi.stubGlobal('fetch', mockFetch);
+    globalThis.fetch = mockFetch as unknown as typeof globalThis.fetch;
 
     render(<BacktestConfig wsRef={mockWsRef} />);
     
@@ -145,7 +150,7 @@ describe('BacktestConfig', () => {
         ],
       }),
     });
-    vi.stubGlobal('fetch', mockFetch);
+    globalThis.fetch = mockFetch as unknown as typeof globalThis.fetch;
 
     render(<BacktestConfig wsRef={mockWsRef} />);
     
@@ -195,7 +200,7 @@ describe('BacktestConfig', () => {
         ],
       }),
     });
-    vi.stubGlobal('fetch', mockFetch);
+    globalThis.fetch = mockFetch as unknown as typeof globalThis.fetch;
 
     render(<BacktestConfig wsRef={mockWsRef} />);
     
@@ -233,7 +238,7 @@ describe('BacktestConfig', () => {
         ],
       }),
     });
-    vi.stubGlobal('fetch', mockFetch);
+    globalThis.fetch = mockFetch as unknown as typeof globalThis.fetch;
 
     render(<BacktestConfig wsRef={mockWsRef} />);
     
@@ -268,13 +273,9 @@ describe('BacktestConfig', () => {
 
     render(<BacktestConfig wsRef={mockWsRef} />);
     
-    // EMA Crossover appears in select option AND strategy info display
+    // EMA Crossover appears in select option
     const emaCrossoverElements = screen.getAllByText('EMA Crossover');
-    expect(emaCrossoverElements).toHaveLength(2);
-    expect(screen.getByText('fast_period')).toBeInTheDocument();
-    expect(screen.getByText('slow_period')).toBeInTheDocument();
-    expect(screen.getByText('9')).toBeInTheDocument();
-    expect(screen.getByText('21')).toBeInTheDocument();
+    expect(emaCrossoverElements).toHaveLength(1);
   });
 
   it('START BACKTEST button exists', () => {

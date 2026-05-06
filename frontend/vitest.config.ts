@@ -6,7 +6,8 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['./src/tests/setup.ts'],
+    setupFiles: ['./src/tests/setup-jsdom.ts', './src/tests/setup.ts'],
+    exclude: ['tests/e2e/**', 'node_modules', 'dist'],
   },
   resolve: {
     dedupe: ['react', 'react-dom'],

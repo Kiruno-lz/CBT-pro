@@ -110,12 +110,12 @@ if [ ! -f "$PROJECT_ROOT/frontend/package.json" ]; then
     echo "✗ 前端项目未找到: $PROJECT_ROOT/frontend"
     exit 1
 fi
-if [ ! -d "$PROJECT_ROOT/frontend/node_modules" ]; then
+if [ ! -d "$PROJECT_ROOT/frontend/node_modules" ] && [ ! -d "$PROJECT_ROOT/frontend/.bun" ]; then
     echo "  安装前端依赖..."
-    cd "$PROJECT_ROOT/frontend" && npm install
+    cd "$PROJECT_ROOT/frontend" && bun install
 fi
 cd "$PROJECT_ROOT/frontend"
-npm run dev > /tmp/frontend.log 2>&1 &
+bun run dev > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
 sleep 3
 if ! kill -0 $FRONTEND_PID 2>/dev/null; then
