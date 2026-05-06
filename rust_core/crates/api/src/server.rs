@@ -24,7 +24,37 @@ use rust_decimal::Decimal;
 use std::str::FromStr;
 
 /// Application state shared across handlers.
-pub type AppState = Arc<Mutex<HashMap<String, BacktestEngine>>>;
+pub struct AppStateInner {
+    pub engines: HashMap<String, BacktestEngine>,
+    pub data_provider: Option<data_pipeline::backtest::BacktestDataProvider>,
+    pub data_provider_exchange: Option<String>,
+}
+
+impl Default for AppStateInner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AppStateInner {
+    pub fn new() -> Self {
+        Self {
+            engines: HashMap::new(),
+            data_provider: None,
+            data_provider_exchange: None,
+        }
+    }
+
+    pub fn with_data_provider(provider: data_pipeline::backtest::BacktestDataProvider) -> Self {
+        Self {
+            engines: HashMap::new(),
+            data_provider: Some(provider),
+            data_provider_exchange: None,
+        }
+    }
+}
+
+pub type AppState = Arc<Mutex<AppStateInner>>;
 
 #[derive(Serialize)]
 struct StartBacktestRequest {
@@ -73,6 +103,172 @@ async fn health_check() -> &'static str {
     "ok"
 }
 
+const EXCHANGE_PRIORITY: &[&str] = &["binance", "okx", "bybit"];
+
+async fn fetch_bars_with_fallback<F, Fut>(
+    symbol: &str,
+    count: usize,
+    timeframe: TimeFrame,
+    start_time: i64,
+    end_time: i64,
+    database_url: Option<&str>,
+    existing_provider: Option<data_pipeline::backtest::BacktestDataProvider>,
+    existing_exchange: Option<String>,
+    mut provider_factory: F,
+) -> Result<
+    (
+        Vec<StandardBar>,
+        Option<data_pipeline::backtest::BacktestDataProvider>,
+        Option<String>,
+    ),
+    data_pipeline::error::DataError,
+>
+where
+    F: FnMut(&str, &str) -> Fut,
+    Fut: std::future::Future<
+        Output = Result<
+            data_pipeline::backtest::BacktestDataProvider,
+            data_pipeline::error::DataError,
+        >,
+    >,
+{
+    let timeframe_str = match timeframe {
+        TimeFrame::M1 => "1m",
+        TimeFrame::M3 => "3m",
+        TimeFrame::M5 => "5m",
+        TimeFrame::M15 => "15m",
+        TimeFrame::M30 => "30m",
+        TimeFrame::H1 => "1h",
+        TimeFrame::H4 => "4h",
+        TimeFrame::D1 => "1d",
+        TimeFrame::W1 => "1w",
+        TimeFrame::Custom(_secs) => {
+            // For custom timeframes, we need to use the numeric representation
+            // Since this is only used for synthetic fallback in tests,
+            // we can default to "1m"
+            "1m"
+        }
+    };
+    let backtest_config =
+        data_pipeline::backtest::BacktestConfig::new(symbol, timeframe_str, count)
+            .with_start_time(start_time / 1000) // Convert ms to seconds
+            .with_end_time(end_time / 1000); // Convert ms to seconds
+
+    let mut data_provider = existing_provider;
+    let data_provider_exchange = existing_exchange;
+
+    // Try existing provider first
+    if let Some(provider) = data_provider.take() {
+        match provider.get_bars(&backtest_config).await {
+            Ok(bars) => {
+                tracing::info!(
+                    symbol = %symbol,
+                    count = bars.len(),
+                    "Using real historical data for backtest"
+                );
+                return Ok((bars, Some(provider), data_provider_exchange));
+            }
+            Err(e) => {
+                let failed_exchange = data_provider_exchange.clone();
+                tracing::error!(
+                    "Failed to fetch data from existing provider ({}): {}. Trying fallback exchanges...",
+                    failed_exchange.as_deref().unwrap_or("unknown"),
+                    e
+                );
+                drop(provider);
+
+                // Try fallback exchanges, skipping the one that just failed
+                if let Some(url) = database_url {
+                    for exchange in EXCHANGE_PRIORITY {
+                        if failed_exchange.as_deref() == Some(exchange) {
+                            continue;
+                        }
+                        match provider_factory(url, exchange).await {
+                            Ok(new_provider) => {
+                                match new_provider.get_bars(&backtest_config).await {
+                                    Ok(bars) => {
+                                        tracing::info!(
+                                            "Successfully fetched real data from {} exchange",
+                                            exchange
+                                        );
+                                        return Ok((
+                                            bars,
+                                            Some(new_provider),
+                                            Some(exchange.to_string()),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to fetch data from {} exchange: {}. Trying next exchange...",
+                                            exchange,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to fetch data from {} exchange: {}. Trying next exchange...",
+                                    exchange,
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // No existing provider - try creating one for each exchange
+        match database_url {
+            Some(url) => {
+                for exchange in EXCHANGE_PRIORITY {
+                    match provider_factory(url, exchange).await {
+                        Ok(provider) => match provider.get_bars(&backtest_config).await {
+                            Ok(bars) => {
+                                tracing::info!(
+                                    "Successfully fetched real data from {} exchange",
+                                    exchange
+                                );
+                                return Ok((bars, Some(provider), Some(exchange.to_string())));
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                        "Failed to fetch data from {} exchange: {}. Trying next exchange...",
+                                        exchange,
+                                        e
+                                    );
+                            }
+                        },
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to fetch data from {} exchange: {}. Trying next exchange...",
+                                exchange,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            None => {
+                tracing::error!(
+                    "DATABASE_URL not set, cannot fetch real data. Using synthetic data for symbol={}",
+                    symbol
+                );
+            }
+        }
+    }
+
+    // All exchanges failed or no DATABASE_URL - return error
+    tracing::error!(
+        "All exchanges failed for symbol={}. Cannot start backtest without historical data.",
+        symbol
+    );
+    Err(data_pipeline::error::DataError::NotFound(
+        "Historical data not available. Please run the data import script first.".to_string(),
+    ))
+}
+
 async fn start_backtest(
     State(state): State<AppState>,
     Json(payload): Json<Value>,
@@ -103,9 +299,50 @@ async fn start_backtest(
         .unwrap_or(1735689600000);
     let duration_ms = (end_time - start_time).max(0);
     let step_ms = timeframe.as_seconds() * 1000;
-    let count = ((duration_ms / step_ms) as usize).max(100).min(10000);
+    let count = ((duration_ms / step_ms) as usize).clamp(100, 10000);
 
-    let bars = generate_synthetic_bars(&config.symbol, count, timeframe);
+    // Try to fetch real data with exchange fallback, fallback to synthetic
+    let database_url = std::env::var("DATABASE_URL").ok();
+
+    // Extract existing provider outside of long-running IO
+    let (existing_provider, existing_exchange) = {
+        let mut state_guard = state.lock().await;
+        (
+            state_guard.data_provider.take(),
+            state_guard.data_provider_exchange.take(),
+        )
+    };
+
+    let (bars, updated_provider, updated_exchange) = match fetch_bars_with_fallback(
+        &config.symbol,
+        count,
+        timeframe,
+        start_time,
+        end_time,
+        database_url.as_deref(),
+        existing_provider,
+        existing_exchange,
+        |url: &str, exchange: &str| {
+            let url = url.to_string();
+            let exchange = exchange.to_string();
+            async move {
+                data_pipeline::backtest::BacktestDataProvider::from_config(&url, &exchange, 1000)
+                    .await
+            }
+        },
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: format!("{}", e),
+                }),
+            ));
+        }
+    };
     let total_bars = bars.len();
 
     // Build strategy
@@ -126,7 +363,12 @@ async fn start_backtest(
         });
 
     let engine = BacktestEngine::new(config, bars, strategy);
-    state.lock().await.insert(backtest_id.clone(), engine);
+
+    // Lock only for the brief state mutation
+    let mut state_guard = state.lock().await;
+    state_guard.data_provider = updated_provider;
+    state_guard.data_provider_exchange = updated_exchange;
+    state_guard.engines.insert(backtest_id.clone(), engine);
 
     Ok(Json(StartBacktestResponse {
         backtest_id,
@@ -140,7 +382,7 @@ async fn pause_backtest(
     Path(id): Path<String>,
 ) -> Result<Json<GenericResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut engines = state.lock().await;
-    match engines.get_mut(&id) {
+    match engines.engines.get_mut(&id) {
         Some(_engine) => {
             // Pause logic would go here - for MVP, just acknowledge
             Ok(Json(GenericResponse {
@@ -161,7 +403,7 @@ async fn resume_backtest(
     Path(id): Path<String>,
 ) -> Result<Json<GenericResponse>, (StatusCode, Json<ErrorResponse>)> {
     let mut engines = state.lock().await;
-    match engines.get_mut(&id) {
+    match engines.engines.get_mut(&id) {
         Some(_engine) => Ok(Json(GenericResponse {
             status: "running".to_string(),
         })),
@@ -179,7 +421,7 @@ async fn get_backtest_state(
     Path(id): Path<String>,
 ) -> Result<Json<EngineSnapshot>, (StatusCode, Json<ErrorResponse>)> {
     let engines = state.lock().await;
-    match engines.get(&id) {
+    match engines.engines.get(&id) {
         Some(engine) => {
             let snapshot = engine.get_state();
             Ok(Json(snapshot))
@@ -197,8 +439,11 @@ async fn get_backtest_result(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<BacktestResult>, (StatusCode, Json<ErrorResponse>)> {
-    let mut engines = state.lock().await;
-    match engines.remove(&id) {
+    let engine = {
+        let mut engines = state.lock().await;
+        engines.engines.remove(&id)
+    };
+    match engine {
         Some(mut engine) => match engine.run() {
             Ok(result) => Ok(Json(result)),
             Err(e) => Err((
@@ -537,7 +782,7 @@ async fn get_indicators(
     let bars: Vec<StandardBar>;
     if let Some(ref backtest_id) = params.backtest_id {
         let engines = state.lock().await;
-        match engines.get(backtest_id) {
+        match engines.engines.get(backtest_id) {
             Some(engine) => {
                 let processed = engine.processed_bars();
                 if processed.is_empty() {
@@ -557,7 +802,7 @@ async fn get_indicators(
         }
     } else {
         let timeframe = TimeFrame::from_string(&params.timeframe).unwrap_or(TimeFrame::M1);
-        bars = generate_synthetic_bars(&params.symbol, 200, timeframe);
+        bars = generate_synthetic_bars(&params.symbol, 200, timeframe, 1704067200000);
     }
 
     let closes: Vec<Decimal> = bars.iter().map(|b| b.close).collect();
@@ -627,11 +872,17 @@ async fn get_strategy_defaults(
 fn parse_engine_config(payload: &Value) -> Result<EngineConfig, String> {
     let config_obj = payload.get("config").ok_or("missing config field")?;
 
-    let symbol = config_obj
+    let raw_symbol = config_obj
         .get("symbol")
         .and_then(|s| s.as_str())
-        .unwrap_or("BTC-USDT")
-        .to_string();
+        .unwrap_or("BTC-USDT");
+
+    let symbol = ["binance", "okx", "bybit"]
+        .iter()
+        .find_map(|exchange| {
+            data_pipeline::symbol::SymbolNormalizer::normalize(raw_symbol, exchange).ok()
+        })
+        .unwrap_or_else(|| raw_symbol.to_string());
 
     let initial_balance = config_obj
         .get("initial_balance")
@@ -729,7 +980,12 @@ fn parse_order_request(payload: Value) -> Result<OrderRequest, String> {
     })
 }
 
-fn generate_synthetic_bars(symbol: &str, count: usize, timeframe: TimeFrame) -> Vec<StandardBar> {
+fn generate_synthetic_bars(
+    symbol: &str,
+    count: usize,
+    timeframe: TimeFrame,
+    start_time: i64,
+) -> Vec<StandardBar> {
     let step_ms = timeframe.as_seconds() * 1000;
     let mut bars = Vec::with_capacity(count);
     let mut rng = SmallRng::seed_from_u64(42);
@@ -744,7 +1000,7 @@ fn generate_synthetic_bars(symbol: &str, count: usize, timeframe: TimeFrame) -> 
         let low = open.min(close) - low_offset;
         let volume = Decimal::from(rng.gen_range(50i64..=500i64));
         bars.push(StandardBar {
-            timestamp: 1704067200000 + i as i64 * step_ms,
+            timestamp: start_time + i as i64 * step_ms,
             open,
             high,
             low,
@@ -765,7 +1021,7 @@ mod tests {
 
     #[test]
     fn test_generate_synthetic_bars_no_short_cycle() {
-        let bars = generate_synthetic_bars("BTC-USDT", 1000, TimeFrame::M1);
+        let bars = generate_synthetic_bars("BTC-USDT", 1000, TimeFrame::M1, 1704067200000);
         let closes: Vec<Decimal> = bars.iter().map(|b| b.close).collect();
         let volumes: Vec<Decimal> = bars.iter().map(|b| b.volume).collect();
 
@@ -785,7 +1041,7 @@ mod tests {
 
     #[test]
     fn test_generate_synthetic_bars_ohlcv_relationships() {
-        let bars = generate_synthetic_bars("BTC-USDT", 1000, TimeFrame::M1);
+        let bars = generate_synthetic_bars("BTC-USDT", 1000, TimeFrame::M1, 1704067200000);
         // 验证每根K线的OHLC关系
         for (i, bar) in bars.iter().enumerate() {
             assert!(bar.high >= bar.open, "Bar {}: high < open", i);
@@ -798,7 +1054,7 @@ mod tests {
 
     #[test]
     fn test_generate_synthetic_bars_random_walk() {
-        let bars = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1);
+        let bars = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1, 1704067200000);
         // 验证价格不是单调递增的（随机漫步应该有涨有跌）
         let mut has_up = false;
         let mut has_down = false;
@@ -815,10 +1071,35 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_synthetic_bars_uses_custom_start_time() {
+        let custom_start = 1609459200000i64; // 2021-01-01 00:00:00 UTC
+        let bars = generate_synthetic_bars("BTC-USDT", 10, TimeFrame::M1, custom_start);
+        assert_eq!(
+            bars[0].timestamp, custom_start,
+            "First bar timestamp should equal the provided start_time"
+        );
+    }
+
+    #[test]
+    fn test_generate_synthetic_bars_spaced_from_start_time() {
+        let custom_start = 1609459200000i64;
+        let bars = generate_synthetic_bars("BTC-USDT", 5, TimeFrame::M1, custom_start);
+        let step_ms = TimeFrame::M1.as_seconds() * 1000;
+        for (i, bar) in bars.iter().enumerate() {
+            let expected = custom_start + i as i64 * step_ms;
+            assert_eq!(
+                bar.timestamp, expected,
+                "Bar {} should be at timestamp {}",
+                i, expected
+            );
+        }
+    }
+
+    #[test]
     fn test_generate_synthetic_bars_deterministic() {
         // 使用相同seed应该生成完全相同的序列
-        let bars1 = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1);
-        let bars2 = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1);
+        let bars1 = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1, 1704067200000);
+        let bars2 = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::M1, 1704067200000);
         assert_eq!(bars1.len(), bars2.len());
         for (a, b) in bars1.iter().zip(bars2.iter()) {
             assert_eq!(a.timestamp, b.timestamp);
@@ -883,7 +1164,7 @@ mod tests {
 
     #[test]
     fn test_generate_synthetic_bars_respects_timeframe() {
-        let bars = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::H1);
+        let bars = generate_synthetic_bars("BTC-USDT", 100, TimeFrame::H1, 1704067200000);
         assert_eq!(bars.len(), 100);
         for window in bars.windows(2) {
             let diff = window[1].timestamp - window[0].timestamp;
@@ -907,7 +1188,7 @@ mod tests {
         });
 
         let config = parse_engine_config(&payload).unwrap();
-        assert_eq!(config.symbol, "ETH-USDT");
+        assert_eq!(config.symbol, "ETH/USDT");
         assert_eq!(config.initial_balance, Decimal::from(5000));
         assert_eq!(config.margin_mode, MarginMode::Isolated);
         assert_eq!(config.default_leverage, Decimal::from(20));
@@ -920,7 +1201,7 @@ mod tests {
         let end_time = payload.get("end_time").unwrap().as_i64().unwrap();
         let step_ms = tf.as_seconds() * 1000;
         let count = ((end_time - start_time) / step_ms) as usize;
-        let bars = generate_synthetic_bars(&config.symbol, count, tf);
+        let bars = generate_synthetic_bars(&config.symbol, count, tf, start_time);
         assert!(!bars.is_empty());
         assert_eq!(bars[1].timestamp - bars[0].timestamp, step_ms);
     }
@@ -931,7 +1212,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_indicators_returns_real_values() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::new()));
         let query = IndicatorQuery {
             symbol: "BTC-USDT".to_string(),
             timeframe: "1m".to_string(),
@@ -977,7 +1258,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_indicators_with_backtest_id() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        // Create 24 hours of 1-minute bars
+        let base_ts = 1704067200i64;
+        let bars: Vec<StandardBar> = (0..1440)
+            .map(|i| make_test_bar(base_ts + i * 60, "42000", "42100", "41900", "42050", "100"))
+            .collect();
+        let provider = create_mock_provider_with_bars(bars);
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::with_data_provider(provider)));
+
         let payload = serde_json::json!({
             "config": {
                 "symbol": "BTC-USDT",
@@ -1003,7 +1291,7 @@ mod tests {
         // Step the engine to process some bars
         {
             let mut engines = state.lock().await;
-            let engine = engines.get_mut(&backtest_id).unwrap();
+            let engine = engines.engines.get_mut(&backtest_id).unwrap();
             for _ in 0..20 {
                 engine.step();
             }
@@ -1045,7 +1333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_indicators_with_full_series() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::new()));
         let query = IndicatorQuery {
             symbol: "BTC-USDT".to_string(),
             timeframe: "1m".to_string(),
@@ -1090,7 +1378,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_indicators_invalid_backtest_id() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::new()));
         let query = IndicatorQuery {
             symbol: "BTC-USDT".to_string(),
             timeframe: "1m".to_string(),
@@ -1115,7 +1403,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_indicators_custom_parameters() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::new()));
         let query = IndicatorQuery {
             symbol: "BTC-USDT".to_string(),
             timeframe: "1m".to_string(),
@@ -1176,7 +1464,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_indicators_bollinger_15_2() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::new()));
         let query = IndicatorQuery {
             symbol: "BTC-USDT".to_string(),
             timeframe: "1m".to_string(),
@@ -1225,7 +1513,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_indicators_backtest_progress_limiting() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        // Create 24 hours of 1-minute bars
+        let base_ts = 1704067200i64;
+        let bars: Vec<StandardBar> = (0..1440)
+            .map(|i| make_test_bar(base_ts + i * 60, "42000", "42100", "41900", "42050", "100"))
+            .collect();
+        let provider = create_mock_provider_with_bars(bars);
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::with_data_provider(provider)));
+
         let payload = serde_json::json!({
             "config": {
                 "symbol": "BTC-USDT",
@@ -1285,7 +1580,7 @@ mod tests {
         // Step the engine a few times
         {
             let mut engines = state.lock().await;
-            let engine = engines.get_mut(&backtest_id).unwrap();
+            let engine = engines.engines.get_mut(&backtest_id).unwrap();
             for _ in 0..20 {
                 engine.step();
             }
@@ -1391,7 +1686,7 @@ mod tests {
 
     #[test]
     fn test_bollinger_15_2_calculation() {
-        let bars = generate_synthetic_bars("BTC-USDT", 200, TimeFrame::M1);
+        let bars = generate_synthetic_bars("BTC-USDT", 200, TimeFrame::M1, 1704067200000);
         let closes: Vec<Decimal> = bars.iter().map(|b| b.close).collect();
         let highs: Vec<Decimal> = bars.iter().map(|b| b.high).collect();
         let lows: Vec<Decimal> = bars.iter().map(|b| b.low).collect();
@@ -1570,7 +1865,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_start_backtest_with_custom_params() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        // Create 24 hours of 1-minute bars
+        let base_ts = 1704067200i64;
+        let bars: Vec<StandardBar> = (0..1440)
+            .map(|i| make_test_bar(base_ts + i * 60, "42000", "42100", "41900", "42050", "100"))
+            .collect();
+        let provider = create_mock_provider_with_bars(bars);
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::with_data_provider(provider)));
+
         let payload = serde_json::json!({
             "config": {
                 "symbol": "BTC-USDT",
@@ -1608,14 +1910,21 @@ mod tests {
         // Verify engine was stored in state
         let engines = state.lock().await;
         assert!(
-            engines.contains_key(&response.backtest_id),
+            engines.engines.contains_key(&response.backtest_id),
             "Engine should be stored in state"
         );
     }
 
     #[tokio::test]
     async fn test_start_backtest_with_invalid_strategy() {
-        let state: AppState = Arc::new(Mutex::new(HashMap::new()));
+        // Create 24 hours of 1-minute bars
+        let base_ts = 1704067200i64;
+        let bars: Vec<StandardBar> = (0..1440)
+            .map(|i| make_test_bar(base_ts + i * 60, "42000", "42100", "41900", "42050", "100"))
+            .collect();
+        let provider = create_mock_provider_with_bars(bars);
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::with_data_provider(provider)));
+
         let payload = serde_json::json!({
             "config": {
                 "symbol": "BTC-USDT",
@@ -1645,6 +1954,493 @@ mod tests {
 
         // Verify engine was stored
         let engines = state.lock().await;
-        assert!(engines.contains_key(&response.backtest_id));
+        assert!(engines.engines.contains_key(&response.backtest_id));
+    }
+
+    // ===================================================================
+    // Mock infrastructure for BacktestDataProvider tests
+    // ===================================================================
+
+    #[derive(Debug, Clone)]
+    struct TestMockStorage {
+        bars: std::sync::Arc<tokio::sync::Mutex<Vec<StandardBar>>>,
+    }
+
+    impl TestMockStorage {
+        fn with_bars(bars: Vec<StandardBar>) -> Self {
+            Self {
+                bars: std::sync::Arc::new(tokio::sync::Mutex::new(bars)),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl data_pipeline::fetcher::DataStorage for TestMockStorage {
+        async fn query_data_ranges(
+            &self,
+            _symbol: &str,
+        ) -> Result<Vec<(i64, i64)>, data_pipeline::error::DataError> {
+            let bars = self.bars.lock().await;
+            if bars.is_empty() {
+                return Ok(vec![]);
+            }
+            let min_ts = bars.iter().map(|b| b.timestamp).min().unwrap();
+            let max_ts = bars.iter().map(|b| b.timestamp).max().unwrap();
+            Ok(vec![(min_ts, max_ts + 60)])
+        }
+
+        async fn insert_bars(
+            &self,
+            _bars: &[StandardBar],
+        ) -> Result<u64, data_pipeline::error::DataError> {
+            Ok(0)
+        }
+
+        async fn query_bars(
+            &self,
+            _symbol: &str,
+            start: i64,
+            end: i64,
+        ) -> Result<Vec<StandardBar>, data_pipeline::error::DataError> {
+            let bars = self.bars.lock().await;
+            let filtered: Vec<StandardBar> = bars
+                .iter()
+                .filter(|b| b.timestamp >= start && b.timestamp < end)
+                .cloned()
+                .collect();
+            Ok(filtered)
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestMockAdapter {
+        bars: std::sync::Arc<tokio::sync::Mutex<Vec<StandardBar>>>,
+        should_fail: std::sync::Arc<tokio::sync::Mutex<bool>>,
+    }
+
+    impl TestMockAdapter {
+        fn with_bars(bars: Vec<StandardBar>) -> Self {
+            Self {
+                bars: std::sync::Arc::new(tokio::sync::Mutex::new(bars)),
+                should_fail: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
+            }
+        }
+
+        fn set_fail(&self, fail: bool) {
+            let mut f = self.should_fail.try_lock().unwrap();
+            *f = fail;
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl data_pipeline::exchange::ExchangeAdapter for TestMockAdapter {
+        fn name(&self) -> &str {
+            "test_mock"
+        }
+
+        async fn fetch_ohlcv(
+            &self,
+            _symbol: &str,
+            _interval_secs: u64,
+            _start_time: i64,
+            _end_time: i64,
+        ) -> Result<Vec<StandardBar>, data_pipeline::error::DataError> {
+            let fail = *self.should_fail.lock().await;
+            if fail {
+                return Err(data_pipeline::error::DataError::Exchange(
+                    "mock fetch failure".to_string(),
+                ));
+            }
+            let bars = self.bars.lock().await.clone();
+            Ok(bars)
+        }
+
+        async fn fetch_symbols(&self) -> Result<Vec<String>, data_pipeline::error::DataError> {
+            Ok(vec![])
+        }
+
+        fn min_interval_secs(&self) -> u64 {
+            60
+        }
+
+        fn max_limit_per_request(&self) -> usize {
+            1000
+        }
+
+        fn normalize_symbol(&self, symbol: &str) -> String {
+            symbol.to_string()
+        }
+    }
+
+    fn create_mock_provider_with_bars(
+        bars: Vec<StandardBar>,
+    ) -> data_pipeline::backtest::BacktestDataProvider {
+        let storage = std::sync::Arc::new(TestMockStorage::with_bars(bars));
+        let adapter: Box<dyn data_pipeline::exchange::ExchangeAdapter> =
+            Box::new(TestMockAdapter::with_bars(vec![]));
+        data_pipeline::backtest::BacktestDataProvider::with_storage_and_adapter(
+            storage, adapter, 100,
+        )
+    }
+
+    fn make_test_bar(ts: i64, o: &str, h: &str, l: &str, c: &str, v: &str) -> StandardBar {
+        StandardBar {
+            timestamp: ts,
+            open: Decimal::from_str(o).unwrap(),
+            high: Decimal::from_str(h).unwrap(),
+            low: Decimal::from_str(l).unwrap(),
+            close: Decimal::from_str(c).unwrap(),
+            volume: Decimal::from_str(v).unwrap(),
+            symbol: "BTC-USDT".to_string(),
+            exchange: "test".to_string(),
+            confirmed: true,
+        }
+    }
+
+    // ===================================================================
+    // BacktestDataProvider integration tests
+    // ===================================================================
+
+    #[tokio::test]
+    async fn test_start_backtest_with_real_data_from_provider() {
+        // Create 10 hours of 1-minute bars starting at 2024-01-01 00:00:00 UTC
+        let base_ts = 1704067200i64;
+        let bars: Vec<StandardBar> = (0..600)
+            .map(|i| make_test_bar(base_ts + i * 60, "42000", "42100", "41900", "42050", "100"))
+            .collect();
+
+        let provider = create_mock_provider_with_bars(bars);
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::with_data_provider(provider)));
+
+        let payload = serde_json::json!({
+            "config": {
+                "symbol": "BTC-USDT",
+                "initial_balance": "100000",
+                "margin_mode": "Cross",
+                "default_leverage": "10"
+            },
+            "strategy_id": "ema_crossover",
+            "timeframe": "1m",
+            "start_time": 1704067200000i64,
+            "end_time": 1704103200000i64
+        });
+
+        let result = start_backtest(State(state.clone()), Json(payload)).await;
+        assert!(
+            result.is_ok(),
+            "start_backtest with real data provider should succeed"
+        );
+
+        let response = match result {
+            Ok(Json(v)) => v,
+            Err(_) => panic!("Expected Ok result"),
+        };
+        assert_eq!(response.status, "running");
+        assert!(response.total_bars > 0, "total_bars should be positive");
+        // With 1m timeframe over 10 hours, we expect 600 bars (no max(100) override)
+        assert_eq!(
+            response.total_bars, 600,
+            "Should get exactly 600 bars from provider"
+        );
+
+        // Verify engine was stored and uses real data from provider
+        let engines = state.lock().await;
+        assert!(
+            engines.engines.contains_key(&response.backtest_id),
+            "Engine should be stored in state"
+        );
+        let engine = engines.engines.get(&response.backtest_id).unwrap();
+        let bars = engine.bars();
+        assert!(!bars.is_empty(), "Engine should have bars from provider");
+        assert_eq!(
+            bars[0].exchange, "test",
+            "Bars should come from mock provider (exchange='test'), not synthetic (exchange='binance')"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_start_backtest_with_empty_provider_returns_error() {
+        // Create provider with empty storage - will cause insufficient data error
+        let provider = create_mock_provider_with_bars(vec![]);
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::with_data_provider(provider)));
+
+        let payload = serde_json::json!({
+            "config": {
+                "symbol": "BTC-USDT",
+                "initial_balance": "100000",
+                "margin_mode": "Cross",
+                "default_leverage": "10"
+            },
+            "strategy_id": "ema_crossover",
+            "timeframe": "1m",
+            "start_time": 1704067200000i64,
+            "end_time": 1704153600000i64
+        });
+
+        let result = start_backtest(State(state.clone()), Json(payload)).await;
+        assert!(
+            result.is_err(),
+            "start_backtest should return error when provider has no data"
+        );
+
+        match result {
+            Err((status, Json(err_response))) => {
+                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+                assert!(
+                    err_response.error.contains("insufficient data")
+                        || err_response.error.contains("Historical data not available"),
+                    "Error should indicate missing data: {}",
+                    err_response.error
+                );
+            }
+            Ok(_) => panic!("Expected error result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_backtest_without_provider_returns_error() {
+        let state: AppState = Arc::new(Mutex::new(AppStateInner::new()));
+
+        let payload = serde_json::json!({
+            "config": {
+                "symbol": "BTC-USDT",
+                "initial_balance": "100000",
+                "margin_mode": "Cross",
+                "default_leverage": "10"
+            },
+            "strategy_id": "ema_crossover",
+            "timeframe": "1m",
+            "start_time": 1704067200000i64,
+            "end_time": 1704153600000i64
+        });
+
+        let result = start_backtest(State(state.clone()), Json(payload)).await;
+        assert!(
+            result.is_err(),
+            "start_backtest without provider should return error when no data is available"
+        );
+
+        match result {
+            Err((status, Json(err_response))) => {
+                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+                assert!(
+                    err_response.error.contains("Historical data not available"),
+                    "Error should indicate missing historical data: {}",
+                    err_response.error
+                );
+            }
+            Ok(_) => panic!("Expected error result"),
+        }
+    }
+
+    // ===================================================================
+    // Exchange fallback logic tests (TDD)
+    // ===================================================================
+
+    #[tokio::test]
+    async fn test_fetch_bars_no_provider_no_database_url_returns_error() {
+        let result = fetch_bars_with_fallback(
+            "BTC-USDT",
+            100,
+            TimeFrame::M1,
+            1704067200000i64,
+            1704153600000i64,
+            None,
+            None,
+            None,
+            |_url: &str, _exchange: &str| async move {
+                panic!("Factory should not be called when DATABASE_URL is not set");
+            },
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "Should return error when DATABASE_URL is not set"
+        );
+        let err = result.unwrap_err();
+        let err_msg = format!("{}", err);
+        assert!(
+            err_msg.contains("Historical data not available"),
+            "Error should indicate missing historical data: {}",
+            err_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_bars_provider_fails_tries_fallback_exchanges() {
+        // Create a provider that will fail
+        let failing_provider = create_mock_provider_with_bars(vec![]);
+        let existing_provider = Some(failing_provider);
+        let existing_exchange = Some("binance".to_string());
+
+        let mut call_count = 0;
+        let (bars, updated_provider, updated_exchange) = fetch_bars_with_fallback(
+            "BTC-USDT",
+            10,
+            TimeFrame::M1,
+            1704067200000i64,
+            1704153600000i64,
+            Some("postgres://fake"),
+            existing_provider,
+            existing_exchange,
+            |url: &str, exchange: &str| {
+                call_count += 1;
+                assert_eq!(url, "postgres://fake");
+                let exchange = exchange.to_string();
+                async move {
+                    match exchange.as_str() {
+                        "binance" => panic!("Should skip binance since it already failed"),
+                        "okx" => Err(data_pipeline::error::DataError::Exchange(
+                            "okx failed".to_string(),
+                        )),
+                        "bybit" => {
+                            // Return a provider with data in the correct time range
+                            // Time range: [1704153000, 1704153600) for 10 bars of 1m
+                            let bars: Vec<StandardBar> = (0..10)
+                                .map(|i| {
+                                    make_test_bar(
+                                        1704153000 + i as i64 * 60,
+                                        "42000",
+                                        "42100",
+                                        "41900",
+                                        "42050",
+                                        "100",
+                                    )
+                                })
+                                .collect();
+                            Ok(create_mock_provider_with_bars(bars))
+                        }
+                        _ => panic!("Unexpected exchange: {}", exchange),
+                    }
+                }
+            },
+        )
+        .await
+        .expect("Should succeed with bybit fallback");
+
+        assert!(!bars.is_empty(), "Should return bars from bybit fallback");
+        assert_eq!(
+            call_count, 2,
+            "Should try okx and bybit only (skip binance)"
+        );
+        assert!(
+            updated_provider.is_some(),
+            "State should have the successful bybit provider"
+        );
+        assert_eq!(
+            updated_exchange.as_deref(),
+            Some("bybit"),
+            "State should track the successful exchange"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_bars_successful_provider_saved_to_state() {
+        let (bars, updated_provider, updated_exchange) = fetch_bars_with_fallback(
+            "BTC-USDT",
+            10,
+            TimeFrame::M1,
+            1704067200000i64,
+            1704153600000i64,
+            Some("postgres://fake"),
+            None,
+            None,
+            |_url: &str, exchange: &str| {
+                assert_eq!(exchange, "binance", "Should try binance first");
+                let _exchange = exchange.to_string();
+                async move {
+                    // Time range: [1704153000, 1704153600) for 10 bars of 1m
+                    let bars: Vec<StandardBar> = (0..10)
+                        .map(|i| {
+                            make_test_bar(
+                                1704153000 + i as i64 * 60,
+                                "42000",
+                                "42100",
+                                "41900",
+                                "42050",
+                                "100",
+                            )
+                        })
+                        .collect();
+                    Ok(create_mock_provider_with_bars(bars))
+                }
+            },
+        )
+        .await
+        .expect("Should return bars from binance provider");
+
+        assert!(!bars.is_empty(), "Should return bars from binance provider");
+        assert!(
+            updated_provider.is_some(),
+            "Provider should be saved to state"
+        );
+        assert_eq!(
+            updated_exchange.as_deref(),
+            Some("binance"),
+            "Exchange should be saved to state"
+        );
+
+        // Verify provider is reused on second call
+        let (bars2, _, _) = fetch_bars_with_fallback(
+            "BTC-USDT",
+            10,
+            TimeFrame::M1,
+            1704067200000i64,
+            1704153600000i64,
+            None,
+            updated_provider,
+            updated_exchange,
+            |_url: &str, _exchange: &str| async move {
+                panic!("Factory should not be called when provider exists and succeeds");
+            },
+        )
+        .await
+        .expect("Reused provider should return same bars");
+
+        assert_eq!(
+            bars.len(),
+            bars2.len(),
+            "Reused provider should return same bars"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_bars_all_exchanges_fail_returns_error() {
+        let mut call_count = 0;
+        let result = fetch_bars_with_fallback(
+            "BTC-USDT",
+            100,
+            TimeFrame::M1,
+            1704067200000i64,
+            1704153600000i64,
+            Some("postgres://fake"),
+            None,
+            None,
+            |_url: &str, exchange: &str| {
+                call_count += 1;
+                let exchange = exchange.to_string();
+                async move {
+                    Err(data_pipeline::error::DataError::Exchange(format!(
+                        "{} connection refused",
+                        exchange
+                    )))
+                }
+            },
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "Should return error when all exchanges fail"
+        );
+        let err = result.unwrap_err();
+        let err_msg = format!("{}", err);
+        assert!(
+            err_msg.contains("Historical data not available"),
+            "Error should indicate missing historical data: {}",
+            err_msg
+        );
+        assert_eq!(call_count, 3, "Should try all 3 exchanges");
     }
 }

@@ -20,7 +20,11 @@ enum ClientMessage {
         backtest_id: String,
     },
     #[serde(rename = "control")]
-    Control { action: String, speed: Option<f64> },
+    Control {
+        action: String,
+        speed: Option<f64>,
+        backtest_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -65,7 +69,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             current_backtest_id = Some(backtest_id.clone());
                             // Send initial snapshot
                             let engines = state.lock().await;
-                            if let Some(engine) = engines.get(&backtest_id) {
+                            if let Some(engine) = engines.engines.get(&backtest_id) {
                                 let snapshot = engine.get_state();
                                 let resp = ServerMessage::Snapshot { data: snapshot };
                                 let _ = socket
@@ -74,14 +78,19 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                             }
                         }
                     }
-                    Ok(ClientMessage::Control { action, speed }) => {
+                    Ok(ClientMessage::Control {
+                        action,
+                        speed,
+                        backtest_id,
+                    }) => {
                         if let Some(s) = speed {
                             playback_speed = s;
                         }
                         // Handle play/pause/step controls
-                        if let Some(ref bt_id) = current_backtest_id {
+                        let target_id = backtest_id.as_ref().or(current_backtest_id.as_ref());
+                        if let Some(bt_id) = target_id {
                             let mut engines = state.lock().await;
-                            if let Some(engine) = engines.get_mut(bt_id) {
+                            if let Some(engine) = engines.engines.get_mut(bt_id) {
                                 match action.as_str() {
                                     "step_forward" | "play" => {
                                         if let Some(snapshot) = engine.step() {
@@ -128,6 +137,28 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                         serde_json::to_string(&trade_resp).unwrap(),
                                                     ))
                                                     .await;
+                                            }
+                                        } else {
+                                            // Engine completed all bars - send final result
+                                            match engine.run() {
+                                                Ok(result) => {
+                                                    let resp = ServerMessage::Complete { result };
+                                                    let _ = socket
+                                                        .send(Message::Text(
+                                                            serde_json::to_string(&resp).unwrap(),
+                                                        ))
+                                                        .await;
+                                                }
+                                                Err(e) => {
+                                                    let resp = ServerMessage::Error {
+                                                        message: format!("Engine error: {}", e),
+                                                    };
+                                                    let _ = socket
+                                                        .send(Message::Text(
+                                                            serde_json::to_string(&resp).unwrap(),
+                                                        ))
+                                                        .await;
+                                                }
                                             }
                                         }
                                     }
